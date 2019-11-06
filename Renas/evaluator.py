@@ -2,180 +2,135 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from datetime import datetime
-import math
 import time
 import os
 import numpy as np
 import tensorflow as tf
-import random
 import pickle
-
-from base import NetworkUnit
-from info_str import CUR_VER_DIR
-
+import random
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-path = os.path.join(os.getcwd(), CUR_VER_DIR)  # + '/../'
-# path='C:\\Users\\Jalynn\\Desktop'
 
+data_path = '/home/amax/Desktop'
 
 # Global constants describing the CIFAR-10 data set.
 IMAGE_SIZE = 32
 NUM_CLASSES = 10
-NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN = 50000
+NUM_EXAMPLES_FOR_TRAIN = 40000
 NUM_EXAMPLES_PER_EPOCH_FOR_EVAL = 10000
 # Constants describing the training process.
-INITIAL_LEARNING_RATE = 0.001  # Initial learning rate.
-MOVING_AVERAGE_DECAY = 0.99
-REGULARAZTION_RATE = 0.0001
-batch_size = 50
-epoch = 10
+INITIAL_LEARNING_RATE = 0.1  # Initial learning rate.
+NUM_EPOCHS_PER_DECAY = 80.0  # Epochs after which learning rate decays.
+LEARNING_RATE_DECAY_FACTOR = 0.1  # Learning rate decay factor.
+MOVING_AVERAGE_DECAY = 0.98
+batch_size = 64
+epoch = 200
 weight_decay = 0.0003
 momentum_rate = 0.9
-log_save_path = './logs'
-model_save_path = './model/'
+model_path = 'model'
 
 
-def unpickle(file):
-    with open(file, 'rb') as fo:
-        dict = pickle.load(fo, encoding='bytes')
-    return dict
+class DataSet:
 
-
-def load_data_one(file):
-    batch = unpickle(file)
-    data = batch[b'data']
-    labels = batch[b'labels']
-    print("Loading %s : %d." % (file, len(data)))
-    return data, labels
-
-
-def load_data(files, data_dir, label_count):
-    data, labels = load_data_one(os.path.join(data_dir, files[0]))
-    for f in files[1:]:
-        data_n, labels_n = load_data_one(os.path.join(data_dir, f))
-        data = np.append(data, data_n, axis=0)
-        labels = np.append(labels, labels_n, axis=0)
-    labels = np.array([[float(i == label) for i in range(label_count)] for label in labels])
-    data = data.reshape([-1, 3, IMAGE_SIZE, IMAGE_SIZE])
-    data = data.transpose([0, 2, 3, 1])
-    return data, labels
-
-
-def prepare_data():
-    print("======Loading data======")
-    # download_data()
-    data_dir = os.path.join(path, 'cifar-10-batches-py')
-    # image_dim = IMAGE_SIZE * image_size * img_channels
-    meta = unpickle(os.path.join(data_dir, 'batches.meta'))
-
-    print(meta)
-    label_names = meta[b'label_names']
-    label_count = 10
-    train_files = ['data_batch_%d' % d for d in range(1, 6)]
-    train_data, train_labels = load_data(train_files, data_dir, label_count)
-    test_data, test_labels = load_data(['test_batch'], data_dir, label_count)
-
-    print("Train data:", np.shape(train_data), np.shape(train_labels))
-    print("Test data :", np.shape(test_data), np.shape(test_labels))
-    print("======Load finished======")
-
-    return train_data, train_labels, test_data, test_labels
-
-
-def batch_norm(input):
-    # return input
-    return tf.contrib.layers.batch_norm(input, decay=0.9, center=True, scale=True, epsilon=1e-3,
-                                        updates_collections=None)
-
-
-def _random_crop(batch, crop_shape, padding=None):
-    oshape = np.shape(batch[0])
-
-    if padding:
-        oshape = (oshape[0] + 2 * padding, oshape[1] + 2 * padding)
-    new_batch = []
-    npad = ((padding, padding), (padding, padding), (0, 0))
-    for i in range(len(batch)):
-        new_batch.append(batch[i])
-        if padding:
-            new_batch[i] = np.lib.pad(batch[i], pad_width=npad,
-                                      mode='constant', constant_values=0)
-        nh = random.randint(0, oshape[0] - crop_shape[0])
-        nw = random.randint(0, oshape[1] - crop_shape[1])
-        new_batch[i] = new_batch[i][nh:nh + crop_shape[0],
-                       nw:nw + crop_shape[1]]
-    return new_batch
-
-
-def _random_flip_leftright(batch):
-    for i in range(len(batch)):
-        if bool(random.getrandbits(1)):
-            batch[i] = np.fliplr(batch[i])
-    return batch
-
-
-def data_preprocessing(x_train, x_test):
-    x_train = x_train.astype('float32')
-    x_test = x_test.astype('float32')
-
-    x_train[:, :, :, 0] = (x_train[:, :, :, 0] - np.mean(x_train[:, :, :, 0])) / np.std(x_train[:, :, :, 0])
-    x_train[:, :, :, 1] = (x_train[:, :, :, 1] - np.mean(x_train[:, :, :, 1])) / np.std(x_train[:, :, :, 1])
-    x_train[:, :, :, 2] = (x_train[:, :, :, 2] - np.mean(x_train[:, :, :, 2])) / np.std(x_train[:, :, :, 2])
-
-    x_test[:, :, :, 0] = (x_test[:, :, :, 0] - np.mean(x_test[:, :, :, 0])) / np.std(x_test[:, :, :, 0])
-    x_test[:, :, :, 1] = (x_test[:, :, :, 1] - np.mean(x_test[:, :, :, 1])) / np.std(x_test[:, :, :, 1])
-    x_test[:, :, :, 2] = (x_test[:, :, :, 2] - np.mean(x_test[:, :, :, 2])) / np.std(x_test[:, :, :, 2])
-
-    return x_train, x_test
-
-
-def data_augmentation(batch):
-    batch = _random_flip_leftright(batch)
-    batch = _random_crop(batch, [32, 32], 4)
-    return batch
-
-
-def learning_rate_schedule(epoch_num):
-    if epoch_num < 81:
-        return 0.1
-    elif epoch_num < 121:
-        return 0.01
-    else:
-        return 0.001
-
-class Dataset():
     def __init__(self):
-        self.feature = None
-        self.label = None
-        self.shape = None
         return
 
-    def load_from(self, path=""):
-        # TODO
-        return
+    def inputs(self):
+        print("======Loading data======")
+        train_files = ['data_batch_%d' % d for d in range(1, 6)]
+        train_data, train_label = self._load(train_files)
+        train_data, train_label, valid_data, valid_label = self._split(train_data, train_label)
+        test_data, test_label = self._load(['test_batch'])
+        train_data = self._process(train_data)
+        print("======Data Process Done======")
+        return train_data, train_label, valid_data, valid_label, test_data, test_label
+
+    def _load(self, files):
+        data_dir = os.path.join(data_path, 'cifar-10-batches-py')
+        with open(os.path.join(data_dir, files[0]), 'rb') as fo:
+            batch = pickle.load(fo, encoding='bytes')
+        data = batch[b'data']
+        label = np.array(batch[b'labels'])
+        for f in files[1:]:
+            with open(os.path.join(data_dir, f), 'rb') as fo:
+                batch = pickle.load(fo, encoding='bytes')
+            data = np.append(data, batch[b'data'], axis=0)
+            label = np.append(label, batch[b'labels'], axis=0)
+        # label = np.array([[float(i == label) for i in range(NUM_CLASSES)] for label in label])
+        data = data.reshape([-1, 3, IMAGE_SIZE, IMAGE_SIZE])
+        data = data.transpose([0, 2, 3, 1])
+        # preprocess
+        data = self._normalize(data)
+        # shuffle
+        index = [i for i in range(len(data))]
+        random.shuffle(index)
+        data = data[index]
+        label = label[index]
+
+        return data, label
+
+    def _split(self, data, label):
+        return data[:NUM_EXAMPLES_FOR_TRAIN], label[:NUM_EXAMPLES_FOR_TRAIN], \
+               data[NUM_EXAMPLES_FOR_TRAIN:], label[NUM_EXAMPLES_FOR_TRAIN:]
+
+    def _normalize(self, x_train):
+        x_train = x_train.astype('float32')
+        for i in range(3):
+            x_train[:, :, :, i] = (x_train[:, :, :, i] - np.mean(x_train[:, :, :, i])) / np.std(x_train[:, :, :, i])
+        return x_train
+
+    def _process(self, x):
+        x = self._random_crop(x, [32, 32], 8)
+        x = self._random_flip_leftright(x)
+        x = self._cutout(x)
+        return x
+
+    def _random_crop(self, batch, crop_shape, padding=None):
+        oshape = np.shape(batch[0])
+        if padding:
+            oshape = (oshape[0] + 2 * padding, oshape[1] + 2 * padding)
+        new_batch = []
+        npad = ((padding, padding), (padding, padding), (0, 0))
+        for i in range(len(batch)):
+            new_batch.append(batch[i])
+            if padding:
+                new_batch[i] = np.lib.pad(batch[i], pad_width=npad,
+                                          mode='constant', constant_values=0)
+            nh = random.randint(0, oshape[0] - crop_shape[0])
+            nw = random.randint(0, oshape[1] - crop_shape[1])
+            new_batch[i] = new_batch[i][nh:nh + crop_shape[0],
+                           nw:nw + crop_shape[1]]
+        return np.array(new_batch)
+
+    def _random_flip_leftright(self, batch):
+        for i in range(len(batch)):
+            if bool(random.getrandbits(1)):
+                batch[i] = np.fliplr(batch[i])
+        return batch
+
+    def _cutout(self, x):
+        for i in range(len(x)):
+            cut_size = random.randint(0, IMAGE_SIZE // 2)
+            s = random.randint(0, IMAGE_SIZE - cut_size)
+            x[i, s:s + cut_size, s:s + cut_size, :] = 0
+        return x
+
 
 class Evaluator:
-
     def __init__(self):
-
-        self.dtrain = Dataset()
-        self.dvalid = Dataset()
-        self.dataset = Dataset()
-        self.dtrain.feature = []
-        self.dtrain.label = []
-        self.trainindex = []
-        self.dataset.feature, self.dataset.label, self.dvalid.feature, self.dvalid.label = prepare_data()
-        self.dataset.feature, self.dvalid.feature = data_preprocessing(self.dataset.feature, self.dvalid.feature)
-        self.leftindex = range(self.dataset.label.shape[0])
         self.train_num = 0
         self.network_num = 0
         self.max_steps = 0
         self.blocks = 0
-        self.best_score_in_winner = 0
+        self.train_data, self.train_label, self.valid_data, self.valid_label, \
+        self.test_data, self.test_data = DataSet().inputs()
 
-    def _makeconv(self, inputs, hplist, node):
+    def _batch_norm(self, input, train_flag):
+        # return input
+        return tf.contrib.layers.batch_norm(input, decay=0.9, center=True, scale=True, epsilon=1e-3,
+                                            updates_collections=None, is_training=train_flag)
+
+    def _makeconv(self, inputs, hplist, node, train_flag):
         """Generates a convolutional layer according to information in hplist
 
         Args:
@@ -188,14 +143,15 @@ class Evaluator:
         # print('Evaluater:right now we are making conv layer, its node is %d, and the inputs is'%node,inputs,'and the node before it is ',cellist[node-1])
         with tf.variable_scope('conv' + str(node) + 'block' + str(self.blocks)) as scope:
             inputdim = inputs.shape[3]
+            assert type(hplist[2]) == type(1), 'Wrong type of filter size: %s.' % str(type(hplist[2]))
             kernel = tf.get_variable('weights', shape=[hplist[2], hplist[2], inputdim, hplist[1]],
                                      initializer=tf.truncated_normal_initializer(stddev=0.1))
             conv = tf.nn.conv2d(inputs, kernel, [1, 1, 1, 1], padding='SAME')
             biases = tf.get_variable('biases', hplist[1], initializer=tf.constant_initializer(0.0))
-            bias = batch_norm(tf.nn.bias_add(conv, biases))
+            bias = self._batch_norm(tf.nn.bias_add(conv, biases), train_flag)
             if hplist[3] == 'relu':
                 conv1 = tf.nn.relu(bias, name=scope.name)
-            elif hplist[3] == 'tenh' or hplist[3] == 'tanh':
+            elif hplist[3] == 'tanh':
                 conv1 = tf.tanh(bias, name=scope.name)
             elif hplist[3] == 'sigmoid':
                 conv1 = tf.sigmoid(bias, name=scope.name)
@@ -203,6 +159,8 @@ class Evaluator:
                 conv1 = tf.identity(bias, name=scope.name)
             elif hplist[3] == 'leakyrelu':
                 conv1 = tf.nn.leaky_relu(bias, name=scope.name)
+            else:
+                print('Wrong! %s is not a legal activation function!' % hplist[3])
         return conv1
 
     def _makepool(self, inputs, hplist):
@@ -223,7 +181,7 @@ class Evaluator:
         elif hplist[1] == 'global':
             return tf.reduce_mean(inputs, [1, 2], keep_dims=True)
 
-    def _makedense(self, inputs, hplist):
+    def _makedense(self, inputs, hplist, train_flag):
         """Generates dense layers according to information in hplist
 
         Args:
@@ -244,7 +202,8 @@ class Evaluator:
                 # tf.add_to_collection('losses', weight)
                 biases = tf.get_variable('biases', [neural_num], initializer=tf.constant_initializer(0.0))
                 if hplist[2] == 'relu':
-                    local3 = tf.nn.relu(batch_norm(tf.matmul(inputs, weights) + biases), name=scope.name)
+                    local3 = tf.nn.relu(self._batch_norm(tf.matmul(inputs, weights) + biases, train_flag),
+                                        name=scope.name)
                 elif hplist[2] == 'tanh':
                     local3 = tf.tanh(tf.matmul(inputs, weights) + biases, name=scope.name)
                 elif hplist[2] == 'sigmoid':
@@ -255,17 +214,17 @@ class Evaluator:
             i += 1
         return inputs
 
-    def _inference(self, images, graph_full, cellist):  # ,regularizer):
-        '''Method for recovering the network model provided by graph_full and cellist.
+    def _inference(self, images, graph_part, cellist, train_flag):  # ,regularizer):
+        '''Method for recovering the network model provided by graph_part and cellist.
         Args:
           images: Images returned from Dataset() or inputs().
-          graph_full: The topology structure of th network given by adjacency table
+          graph_part: The topology structure of th network given by adjacency table
           cellist:
 
         Returns:
           Logits.'''
         # print('Evaluater:starting to reconstruct the network')
-        nodelen = len(graph_full)
+        nodelen = len(graph_part)
         inputs = [0 for i in range(nodelen)]  # input list for every cell in network
         inputs[0] = images
         getinput = [False for i in range(nodelen)]  # bool list for whether this cell has already got input or not
@@ -274,259 +233,219 @@ class Evaluator:
         for node in range(nodelen):
             # print('Evaluater:right now we are processing node %d'%node,', ',cellist[node])
             if cellist[node][0] == 'conv':
-                layer = self._makeconv(inputs[node], cellist[node], node)
-                layer = tf.nn.lrn(layer, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name='norm2')
+                layer = self._makeconv(inputs[node], cellist[node], node, train_flag)
+                # layer = tf.nn.lrn(layer, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name='norm2')
             elif cellist[node][0] == 'pooling':
                 layer = self._makepool(inputs[node], cellist[node])
             elif cellist[node][0] == 'dense':
-                layer = self._makedense(inputs[node], cellist[node])
+                layer = self._makedense(inputs[node], cellist[node], train_flag)
             else:
-                print("node:", node)
-                print("cell_list_structure:", cellist)
                 print('WRONG!!!!! Notice that you got a layer type we cant process!', cellist[node][0])
                 layer = []
 
             # update inputs information of the cells below this cell
-            for j in graph_full[node]:
+            for j in graph_part[node]:
                 if getinput[j]:  # if this cell already got inputs from other cells precedes it
                     # padding
                     a = int(layer.shape[1])
                     b = int(inputs[j].shape[1])
                     pad = abs(a - b)
                     if layer.shape[1] > inputs[j].shape[1]:
-                        inputs[j] = tf.pad(inputs[j], [[0, 0], [0, pad], [0, pad], [0, 0]])
-                    if layer.shape[1] < inputs[j].shape[1]:
-                        layer = tf.pad(layer, [[0, 0], [0, pad], [0, pad], [0, 0]])
-                    inputs[j] = tf.concat([inputs[j], layer], 3)
+                        tmp = tf.pad(inputs[j], [[0, 0], [0, pad], [0, pad], [0, 0]])
+                        inputs[j] = tf.concat([tmp, layer], 3)
+                    elif layer.shape[1] < inputs[j].shape[1]:
+                        tmp = tf.pad(layer, [[0, 0], [0, pad], [0, pad], [0, 0]])
+                        inputs[j] = tf.concat([inputs[j], tmp], 3)
+                    else:
+                        inputs[j] = tf.concat([inputs[j], layer], 3)
                 else:
                     inputs[j] = layer
                     getinput[j] = True
 
-        # softmax
+        # give last layer a name
         last_layer = tf.identity(layer, name="last_layer" + str(self.blocks))
-        # inputdim = layer.shape[3]
-        # kernel = tf.get_variable('weights', shape=[1, 1, inputdim, NUM_CLASSES],
-        #                          initializer=tf.truncated_normal_initializer(stddev=0.1))
-        # layer = tf.nn.conv2d(layer, kernel, [1, 1, 1, 1], padding='SAME')
-        # layer = tf.reshape(layer, [batch_size, -1])
-        # with tf.variable_scope('softmax_linear') as scope:
-        #     weights = tf.get_variable('weights', shape=[layer.shape[-1], NUM_CLASSES],
-        #                               initializer=tf.truncated_normal_initializer(stddev=0.04))  # 1 / float(dim)))
-        #     biases = tf.get_variable('biases', shape=[NUM_CLASSES], initializer=tf.constant_initializer(0.0))
-        #     # softmax_linear = tf.nn.softmax(tf.matmul(layer, weights)+ biases, name=scope.name)
-        #     softmax_linear = tf.add(tf.matmul(layer, weights), biases, name="last_layer")
-        #     # tf.add_to_collection('losses', regularizer(weights))
         return last_layer
 
-    def evaluate(self, graph_full, cell_list, pre_block, is_bestNN=False, update_pre_weight=False, log_file=None):
+    def _loss(self, labels, logits):
+        """
+          Args:
+            logits: Logits from softmax.
+            labels: Labels from distorted_inputs or inputs(). 1-D tensor of shape [batch_size]
+
+          Returns:
+            Loss tensor of type float.
+          """
+        # Reshape the labels into a dense Tensor of shape [batch_size, NUM_CLASSES].
+        sparse_labels = tf.reshape(labels, [batch_size, 1])
+        indices = tf.reshape(tf.range(batch_size), [batch_size, 1])
+        concated = tf.concat([indices, sparse_labels], 1)
+        dense_labels = tf.sparse_to_dense(concated,
+                                          [batch_size, NUM_CLASSES],
+                                          1.0, 0.0)
+        # Calculate loss.
+        cross_entropy = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=dense_labels, logits=logits))
+        l2 = tf.add_n([tf.nn.l2_loss(var) for var in tf.trainable_variables()])
+        loss = cross_entropy + l2 * weight_decay
+        return loss
+
+    def _train(self, global_step, loss):
+        # Variables that affect learning rate.
+        num_batches_per_epoch = self.train_num / batch_size
+        decay_steps = int(num_batches_per_epoch * NUM_EPOCHS_PER_DECAY)
+
+        # Decay the learning rate exponentially based on the number of steps.
+        lr = tf.train.exponential_decay(INITIAL_LEARNING_RATE,
+                                        global_step,
+                                        decay_steps,
+                                        LEARNING_RATE_DECAY_FACTOR,
+                                        staircase=True)
+
+        # Build a Graph that trains the model with one batch of examples and
+        # updates the model parameters.
+        train_op = tf.train.MomentumOptimizer(lr, momentum_rate, use_nesterov=True).minimize(loss,global_step=global_step)
+        return train_op,lr
+
+    def evaluate(self, graph_part, cell_list, pre_block=[], is_bestNN=False, update_pre_weight=False):
         '''Method for evaluate the given network.
         Args:
-            graph_full: The topology structure of the network given by adjacency table
-            cell_list: The configuration of this network for each node in graph_full.
-            pre_block: The pre-block structure, every block has two parts: graph_full and cell_list of this block.
+            graph_part: The topology structure of the network given by adjacency table
+            cell_list: The configuration of this network for each node in graph_part.
+            pre_block: The pre-block structure, every block has two parts: graph_part and cell_list of this block.
             is_bestNN: Symbol for indicating whether the evaluating network is the best network of this round, default False.
             update_pre_weight: Symbol for indicating whether to update previous blocks' weight, default by False.
         Returns:
-            Accuracy
-        '''
-
-        tf.reset_default_graph()
-        self.blocks = len(pre_block)
+            Accuracy'''
         if self.train_num < batch_size:
-            print(
-                "Wrong! The data added in train dataset is smaller than batch size, batch size is %d, but data in train dataset is only %d",
-                batch_size, self.train_num)
+            print("Wrong! The data added in train dataset is smaller than batch size!")
             self.add_data(batch_size - self.train_num)
             print("Default add batch size picture to the train dataset.")
         self.block_num = len(pre_block)
-        # define placeholder x, y_ , keep_prob, learning_rate
-        learning_rate = tf.placeholder(tf.float32)
-        train_flag = tf.placeholder(tf.bool)
 
+        """Train CIFAR-10 for a number of steps."""
         with tf.Session() as sess:
+            global_step = tf.Variable(0, trainable=False)
+            train_flag = tf.placeholder(tf.bool)
+
             # if it got previous blocks
             if self.block_num > 0:
-                new_saver = tf.train.import_meta_graph(model_save_path + 'my_model_block'+str(self.blocks-1)+'.meta')
-                new_saver.restore(sess, model_save_path+'my_model_block'+str(self.blocks-1))
+                new_saver = tf.train.import_meta_graph(
+                    os.path.join(model_path, 'model_block' + str(self.blocks - 1) + '.meta'))
+                new_saver.restore(sess, tf.train.latest_checkpoint(model_path))
                 graph = tf.get_default_graph()
                 x = graph.get_tensor_by_name("input:0")
-                y_ = graph.get_tensor_by_name("label:0")
+                labels = graph.get_tensor_by_name("label:0")
                 input = graph.get_tensor_by_name("last_layer" + str(self.block_num - 1) + ":0")
+                # a pooling later for every block
+                input = self._makepool(input, ('pool', 'max', 2))
                 # only when there's not so many network in the pool will we update the previous blocks' weight
                 if not update_pre_weight:
                     input = tf.stop_gradient(input, name="stop_gradient")
             # if it's the first block
             else:
                 x = tf.placeholder(tf.float32, [batch_size, IMAGE_SIZE, IMAGE_SIZE, 3], name='input')
-                y_ = tf.placeholder(tf.int64, [batch_size, NUM_CLASSES], name="label")
+                labels = tf.placeholder(tf.int32, [batch_size], name="label")
                 input = x
 
-            # build current block
-            output = self._inference(input, graph_full, cell_list)
-
-            # FC layer
-            output = tf.reshape(output, [batch_size, -1])
-            with tf.variable_scope('lastdense' + str(self.blocks)) as scope:
-                weights = tf.get_variable('weights' + str(self.blocks), shape=[output.shape[-1], NUM_CLASSES],
-                                          initializer=tf.truncated_normal_initializer(stddev=0.04))  # 1 / float(dim)))
-                biases = tf.get_variable('biases' + str(self.blocks), shape=[NUM_CLASSES],
+            logits = self._inference(input, graph_part, cell_list, train_flag)
+            # softmax
+            logits = tf.reshape(logits, [batch_size, -1])
+            with tf.variable_scope('lastdense' + str(self.block_num)) as scope:
+                weights = tf.get_variable('weights' + str(self.block_num), shape=[logits.shape[-1], NUM_CLASSES],
+                                          initializer=tf.truncated_normal_initializer(stddev=0.04))
+                biases = tf.get_variable('biases' + str(self.block_num), shape=[NUM_CLASSES],
                                          initializer=tf.constant_initializer(0.0))
+                logits = tf.add(tf.matmul(logits, weights), biases, name=scope.name)
 
-            y = tf.add(tf.matmul(output, weights), biases, name="result" + str(self.blocks))
+            top_k_op = tf.nn.in_top_k(logits, labels, 1)
+            loss = self._loss(labels, logits)
+            train_op,lr = self._train(global_step, loss)
 
-            # loss function: cross_entropy+l2
-            # train_step: training operation
-            cross_entropy = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=y_, logits=y))
-            l2 = tf.add_n([tf.nn.l2_loss(var) for var in tf.trainable_variables()])
-            train_step = tf.train.MomentumOptimizer(learning_rate, momentum_rate, use_nesterov=True,
-                                                    name='opt' + str(self.blocks)). \
-                minimize(cross_entropy + l2 * weight_decay)
-
-            correct_prediction = tf.equal(tf.argmax(y, 1), tf.argmax(y_, 1))
-            accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+            # Create a saver.
+            saver = tf.train.Saver(tf.global_variables())
+            # Start running operations on the Graph.
             sess.run(tf.global_variables_initializer())
-            # initial an saver to save model
-            saver = tf.train.Saver()
 
-            summary_writer = tf.summary.FileWriter(log_save_path, sess.graph)
+            for ep in range(epoch):
+                for step in range(self.max_steps):
+                    start_time = time.time()
+                    batch_x = self.train_data[step * batch_size:step * batch_size + batch_size]
+                    batch_y = self.train_label[step * batch_size:step * batch_size + batch_size]
+                    _, loss_value,lrt = sess.run([train_op, loss,lr],
+                                             feed_dict={x: batch_x, labels: batch_y, train_flag: True})
 
-            if is_bestNN:
-                epoch = 1 #64
-            else:
-                epoch = 1 #16
-            for ep in range(1, epoch + 1):
-                lr = learning_rate_schedule(ep)
-                pre_index = 0
-                train_acc = 0.0
-                train_loss = 0.0
-                start_time = time.time()
+                    assert not np.isnan(loss_value), 'Model diverged with loss = NaN'
 
-                print("\n epoch %d/%d:" % (ep, epoch))
-                log_file.write("\n epoch %d/%d:\n" % (ep, epoch))
+                    if step % 100 == 0:
+                        format_str = ('step %d, loss = %.2f, learning rate=%.4f (%.3f sec)')
+                        print(format_str % (step, loss_value,lrt, float(time.time() - start_time)*100))
 
-                for it in range(1, self.max_steps + 1):
-                    batch_x = self.dtrain.feature[pre_index:pre_index + batch_size]
-                    batch_y = self.dtrain.label[pre_index:pre_index + batch_size]
+                if is_bestNN:  # Save the model
+                    saver.save(sess, model_path + 'model_block' + str(self.blocks))
 
-                    batch_x = data_augmentation(batch_x)
+                # Start the queue runners.
+                coord = tf.train.Coordinator()
+                try:
+                    threads = []
+                    for qr in tf.get_collection(tf.GraphKeys.QUEUE_RUNNERS):
+                        threads.extend(qr.create_threads(sess, coord=coord, daemon=True, start=True))
 
-                    _, batch_loss = sess.run([train_step, cross_entropy],
-                                             feed_dict={x: batch_x, y_: batch_y,
-                                                        learning_rate: lr, train_flag: True})
-                    batch_acc = accuracy.eval(feed_dict={x: batch_x, y_: batch_y, train_flag: True})
+                    num_iter = NUM_EXAMPLES_PER_EPOCH_FOR_EVAL // batch_size
+                    true_count = 0  # Counts the number of correct predictions.
+                    total_sample_count = num_iter * batch_size
+                    step = 0
+                    start_time = time.time()
+                    while step < num_iter and not coord.should_stop():
+                        batch_x = self.valid_data[step * batch_size:step * batch_size + batch_size]
+                        batch_y = self.valid_label[step * batch_size:step * batch_size + batch_size]
+                        predictions = sess.run([top_k_op], feed_dict={x: batch_x, labels: batch_y, train_flag: True})
+                        true_count += np.sum(predictions)
+                        step += 1
 
-                    train_loss += batch_loss
-                    train_acc += batch_acc
-                    pre_index += batch_size
+                    precision = true_count / total_sample_count
+                    print('%d epoch:precision @ 1 = %.3f, cost time %.3f' % (ep,precision, float(time.time() - start_time)))
 
-                    if it == self.max_steps:
-                        train_loss /= self.max_steps
-                        train_acc /= self.max_steps
+                except Exception as e:
+                    coord.request_stop(e)
 
-                        # loss_, acc_ = sess.run([cross_entropy, accuracy],
-                        #                        feed_dict={x: batch_x, y_: batch_y, train_flag: True})
-                        train_summary = tf.Summary(value=[tf.Summary.Value(tag="train_loss", simple_value=train_loss),
-                                                          tf.Summary.Value(tag="train_accuracy",
-                                                                           simple_value=train_acc)])
+                coord.request_stop()
+                coord.join(threads, stop_grace_period_secs=10)
 
-                        val_acc = 0.0
-                        val_loss = 0.0
-                        pre_index = 0
-                        add = batch_size
-                        val_iter = NUM_EXAMPLES_PER_EPOCH_FOR_EVAL / add
-                        for i in range(int(val_iter)):
-                            batch_x = self.dvalid.feature[pre_index:pre_index + add]
-                            batch_y = self.dvalid.label[pre_index:pre_index + add]
-                            pre_index = pre_index + add
-                            loss_, acc_ = sess.run([cross_entropy, accuracy],
-                                                   feed_dict={x: batch_x, y_: batch_y, train_flag: False})
-                            val_loss += loss_ / val_iter
-                            val_acc += acc_ / val_iter
-                        test_summary = tf.Summary(value=[tf.Summary.Value(tag="test_loss", simple_value=val_loss),
-                                                         tf.Summary.Value(tag="test_accuracy", simple_value=val_acc)])
-
-                        summary_writer.add_summary(train_summary, ep)
-                        summary_writer.add_summary(test_summary, ep)
-                        summary_writer.flush()
-
-                        print("iteration: %d/%d, cost_time: %ds, train_loss: %.4f, "
-                              "train_acc: %.4f, test_loss: %.4f, test_acc: %.4f"
-                              % (
-                                  it, self.max_steps, int(time.time() - start_time), train_loss, train_acc, val_loss,
-                                  val_acc))
-                        log_file.write("iteration: %d/%d, cost_time: %ds, train_loss: %.4f, "
-                                       "train_acc: %.4f, test_loss: %.4f, test_acc: %.4f" % (
-                                        it, self.max_steps, int(time.time() - start_time), train_loss,
-                                        train_acc, val_loss, val_acc))
-                    # else:
-                    #     print("iteration: %d/%d, train_loss: %.4f, train_acc: %.4f"
-                    #           % (it, self.max_steps, train_loss / it, train_acc / it))
-
-            if is_bestNN:
-                if val_acc > self.best_score_in_winner:
-                    save_path = saver.save(sess, model_save_path + 'my_model_block' + str(self.blocks))
-                    print("Model saved in file: %s" % save_path)
-                    log_file.write("\nModel saved in file: %s\n" % save_path)
-            sess.close()
-
-        return val_acc
+        return precision
 
     def add_data(self, add_num=0):
-
-        if self.train_num + add_num > 50000 or add_num<0:
-            add_num = 50000 - self.train_num
-            self.train_num = 50000
-            print('Warning! Add number has been changed to ',add_num,', all data is loaded.')
+        if self.train_num + add_num > NUM_EXAMPLES_FOR_TRAIN or add_num < 0:
+            add_num = NUM_EXAMPLES_FOR_TRAIN - self.train_num
+            self.train_num = NUM_EXAMPLES_FOR_TRAIN
+            print('Warning! Add number has been changed to ', add_num, ', all data is loaded.')
         else:
             self.train_num += add_num
         # print('************A NEW ROUND************')
-        self.network_num = 0
-        self.max_steps = int(self.train_num / batch_size)
-
-        # print('Evaluater: Adding data')
-        if add_num:
-            catag = 10
-            for cat in range(catag):
-                # num_train_samples = self.dataset.label.shape[0]
-                cata_index = [i for i in self.leftindex if np.argmax(self.dataset.label[i]) == cat]
-                if len(cata_index) < int(add_num / catag):
-                    selected = cata_index
-                else:
-                    selected = random.sample(cata_index, int(add_num / catag))
-                self.trainindex += selected
-                self.leftindex = [i for i in self.leftindex if not (i in selected)]
-                random.shuffle(self.trainindex)
-                self.dtrain.feature = self.dataset.feature[self.trainindex]
-                self.dtrain.label = self.dataset.label[self.trainindex]
+        self.max_steps = self.train_num // batch_size
         return 0
-
-    def get_train_size(self):
-        return self.train_num
 
 
 if __name__ == '__main__':
+    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
     eval = Evaluator()
-    eval.add_data(5000)
-    lenet = NetworkUnit()
-    lenet.graph_full = [[1], [2], [3], []]
-    cell_list = [('conv', 64, 5, 'relu'), ('pooling', 'max', 3), ('conv', 64, 5, 'relu'), ('pooling', 'max', 3)]
-    lenet.cell_list = [cell_list]
-    e=eval.evaluate(lenet.graph_full,lenet.cell_list[-1],lenet.pre_block)#,is_bestNN=True)
-    print(e)
+    eval.add_data(50000)
+    # graph_full = [[1], [2], [3], []]
+    # cell_list = [('conv', 64, 5, 'relu'), ('pooling', 'max', 3), ('conv', 64, 5, 'relu'), ('pooling', 'max', 3)]
+    # cell_list = [cell_list]
+    # e=eval.evaluate(graph_full,cell_list[-1])#,is_bestNN=True)
+    # print(e)
     # cellist=[('conv', 128, 1, 'relu'), ('conv', 32, 1, 'relu'), ('conv', 256, 1, 'relu'), ('pooling', 'max', 2), ('pooling', 'global', 3), ('conv', 32, 1, 'relu')]
     # cellist=[('pooling', 'global', 2), ('pooling', 'max', 3), ('conv', 21, 32, 'leakyrelu'), ('conv', 16, 32, 'leakyrelu'), ('pooling', 'max', 3), ('conv', 16, 32, 'leakyrelu')]
 
-    vgg = NetworkUnit()
-    vgg.graph_full = [[1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15], [16], [17],
-                      []]
+    graph_full = [[1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15], [16], [17],
+                  []]
     cell_list = [('conv', 64, 3, 'relu'), ('conv', 64, 3, 'relu'), ('pooling', 'max', 2), ('conv', 128, 3, 'relu'),
                  ('conv', 128, 3, 'relu'), ('pooling', 'max', 2), ('conv', 256, 3, 'relu'),
                  ('conv', 256, 3, 'relu'), ('conv', 256, 3, 'relu'), ('pooling', 'max', 2),
                  ('conv', 512, 3, 'relu'), ('conv', 512, 3, 'relu'), ('conv', 512, 3, 'relu'),
                  ('pooling', 'max', 2), ('conv', 512, 3, 'relu'), ('conv', 512, 3, 'relu'),
                  ('conv', 512, 3, 'relu'), ('dense', [4096, 4096, 1000], 'relu')]
-    vgg.cell_list = [cell_list]
-    vgg.pre_block.append([lenet.graph_full, lenet.cell_list[-1]])
-    e = eval.evaluate(vgg.graph_full,vgg.cell_list[-1],vgg.pre_block)#, update_pre_weight=True)
+    cell_list = [cell_list]
+    # pre_block=[graph_full, cell_list[-1]]
+    e = eval.evaluate(graph_full, cell_list[-1])  # , update_pre_weight=True)
     # e=eval.train(network.graph_full,cellist)
     print(e)
