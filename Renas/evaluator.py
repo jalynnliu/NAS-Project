@@ -1,7 +1,3 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import time
 import os
 import numpy as np
@@ -44,7 +40,7 @@ class DataSet:
         label = np.array([[float(i == label) for i in range(self.NUM_CLASSES)] for label in label])
         data = data.reshape([-1, 3, self.IMAGE_SIZE, self.IMAGE_SIZE])
         data = data.transpose([0, 2, 3, 1])
-        # preprocess
+        # pre-process
         data = self._normalize(data)
 
         return data, label
@@ -131,7 +127,6 @@ class Evaluator:
         self.test_data, self.test_label = DataSet().inputs()
 
     def _batch_norm(self, input, train_flag):
-        # return input
         return tf.contrib.layers.batch_norm(input, decay=0.9, center=True, scale=True, epsilon=1e-3,
                                             updates_collections=None, is_training=train_flag)
 
@@ -200,8 +195,6 @@ class Evaluator:
             with tf.variable_scope('dense' + str(i)) as scope:
                 weights = tf.get_variable('weights', shape=[inputs.shape[-1], neural_num],
                                           initializer=tf.contrib.keras.initializers.he_normal())
-                # weight = tf.multiply(tf.nn.l2_loss(weights), 0.004, name='weight_loss')
-                # tf.add_to_collection('losses', weight)
                 biases = tf.get_variable('biases', [neural_num], initializer=tf.constant_initializer(0.0))
                 if hplist[2] == 'relu':
                     local3 = tf.nn.relu(self._batch_norm(tf.matmul(inputs, weights) + biases, train_flag),
@@ -226,16 +219,14 @@ class Evaluator:
           Logits.'''
         # print('Evaluater:starting to reconstruct the network')
         nodelen = len(graph_part)
-        inputs = [0 for i in range(nodelen)]  # input list for every cell in network
-        inputs[0] = images
-        getinput = [False for i in range(nodelen)]  # bool list for whether this cell has already got input or not
+        inputs = [images for _ in range(nodelen)]  # input list for every cell in network
+        getinput = [False for _ in range(nodelen)]  # bool list for whether this cell has already got input or not
         getinput[0] = True
 
         for node in range(nodelen):
             # print('Evaluater:right now we are processing node %d'%node,', ',cellist[node])
             if cellist[node][0] == 'conv':
                 layer = self._makeconv(inputs[node], cellist[node], node, train_flag)
-                # layer = tf.nn.lrn(layer, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name='norm2')
             elif cellist[node][0] == 'pooling':
                 layer = self._makepool(inputs[node], cellist[node])
             elif cellist[node][0] == 'dense':
@@ -302,8 +293,8 @@ class Evaluator:
 
         # Build a Graph that trains the model with one batch of examples and
         # updates the model parameters.
-        train_op = tf.train.MomentumOptimizer(lr, self.momentum_rate, use_nesterov=True).minimize(loss,
-                                                                                                  global_step=global_step)
+        train_op = tf.train.MomentumOptimizer(lr, self.momentum_rate, use_nesterov=True). \
+            minimize(loss, global_step=global_step)
         return train_op, lr
 
     def evaluate(self, graph_part, cell_list, pre_block=[], is_bestNN=False, update_pre_weight=False):
@@ -350,15 +341,8 @@ class Evaluator:
 
             logits = self._inference(input, graph_part, cell_list, train_flag)
             # softmax
-            logits = tf.reshape(logits, [self.batch_size, -1])
-            with tf.variable_scope('lastdense' + str(self.block_num)) as scope:
-                weights = tf.get_variable('weights' + str(self.block_num), shape=[logits.shape[-1], self.NUM_CLASSES],
-                                          initializer=tf.truncated_normal_initializer(stddev=0.04))
-                biases = tf.get_variable('biases' + str(self.block_num), shape=[self.NUM_CLASSES],
-                                         initializer=tf.constant_initializer(0.0))
-                logits = tf.add(tf.matmul(logits, weights), biases, name=scope.name)
+            logits = self._makedense(logits, ('', [self.NUM_CLASSES], 'identity'), train_flag)
 
-            # top_k_op = tf.nn.in_top_k(logits, labels, 1)
             correct_prediction = tf.equal(tf.argmax(logits, 1), tf.argmax(labels, 1))
             accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
@@ -385,9 +369,6 @@ class Evaluator:
                         format_str = ('step %d, loss = %.2f (%.3f sec)')
                         print(format_str % (step, loss_value, float(time.time() - start_time) * 100))
 
-                if is_bestNN:  # Save the model
-                    saver.save(sess, self.model_path + 'model_block' + str(self.blocks))
-
                 num_iter = self.NUM_EXAMPLES_PER_EPOCH_FOR_EVAL // self.batch_size
                 precision = 0
                 start_time = time.time()
@@ -401,6 +382,9 @@ class Evaluator:
 
                 print(
                     '%d epoch: precision @ 1 = %.3f, cost time %.3f' % (ep, precision, float(time.time() - start_time)))
+
+            if is_bestNN:  # Save the model
+                saver.save(sess, self.model_path + 'model_block' + str(self.blocks))
 
         return precision
 
