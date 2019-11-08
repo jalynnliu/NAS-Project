@@ -10,15 +10,15 @@ import pickle
 import random
 import json
 
-data_path = '/home/amax/Desktop'
+data_path = '/data/data'
 
 
 class DataSet:
 
     def __init__(self):
-        self.IMAGE_SIZE=32
-        self.NUM_CLASSES=10
-        self.NUM_EXAMPLES_FOR_TRAIN=50000
+        self.IMAGE_SIZE = 32
+        self.NUM_CLASSES = 10
+        self.NUM_EXAMPLES_FOR_TRAIN = 50000
         return
 
     def inputs(self):
@@ -27,7 +27,6 @@ class DataSet:
         train_data, train_label = self._load(train_files)
         train_data, train_label, valid_data, valid_label = self._split(train_data, train_label)
         test_data, test_label = self._load(['test_batch'])
-        train_data = self._process(train_data)
         print("======Data Process Done======")
         return train_data, train_label, valid_data, valid_label, test_data, test_label
 
@@ -47,15 +46,15 @@ class DataSet:
         data = data.transpose([0, 2, 3, 1])
         # preprocess
         data = self._normalize(data)
+
+        return data, label
+
+    def _split(self, data, label):
         # shuffle
         index = [i for i in range(len(data))]
         random.shuffle(index)
         data = data[index]
         label = label[index]
-
-        return data, label
-
-    def _split(self, data, label):
         return data[:self.NUM_EXAMPLES_FOR_TRAIN], label[:self.NUM_EXAMPLES_FOR_TRAIN], \
                data[self.NUM_EXAMPLES_FOR_TRAIN:], label[self.NUM_EXAMPLES_FOR_TRAIN:]
 
@@ -68,10 +67,10 @@ class DataSet:
 
         return x_train
 
-    def _process(self, x):
+    def process(self, x):
         x = self._random_flip_leftright(x)
         x = self._random_crop(x, [32, 32], 4)
-        # x = self._cutout(x)
+        x = self._cutout(x)
         return x
 
     def _random_crop(self, batch, crop_shape, padding=None):
@@ -108,7 +107,7 @@ class DataSet:
 class Evaluator:
     def __init__(self):
         os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-        config=json.load(open(os.path.join(os.getcwd(),'nas_config.json')))
+        config = json.load(open(os.path.join(os.getcwd(), 'nas_config.json')))
         # Global constants describing the CIFAR-10 data set.
         self.IMAGE_SIZE = 32
         self.NUM_CLASSES = 10
@@ -138,7 +137,6 @@ class Evaluator:
 
     def _makeconv(self, inputs, hplist, node, train_flag):
         """Generates a convolutional layer according to information in hplist
-
         Args:
         inputs: inputing data.
         hplist: hyperparameters for building this layer
@@ -171,7 +169,6 @@ class Evaluator:
 
     def _makepool(self, inputs, hplist):
         """Generates a pooling layer according to information in hplist
-
         Args:
             inputs: inputing data.
             hplist: hyperparameters for building this layer
@@ -189,7 +186,6 @@ class Evaluator:
 
     def _makedense(self, inputs, hplist, train_flag):
         """Generates dense layers according to information in hplist
-
         Args:
                    inputs: inputing data.
                    hplist: hyperparameters for building layers
@@ -226,7 +222,6 @@ class Evaluator:
           images: Images returned from Dataset() or inputs().
           graph_part: The topology structure of th network given by adjacency table
           cellist:
-
         Returns:
           Logits.'''
         # print('Evaluater:starting to reconstruct the network')
@@ -277,7 +272,6 @@ class Evaluator:
           Args:
             logits: Logits from softmax.
             labels: Labels from distorted_inputs or inputs(). 1-D tensor of shape [self.batch_size]
-
           Returns:
             Loss tensor of type float.
           """
@@ -292,7 +286,7 @@ class Evaluator:
         cross_entropy = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=labels, logits=logits))
         l2 = tf.add_n([tf.nn.l2_loss(var) for var in tf.trainable_variables()])
         loss = cross_entropy + l2 * self.weight_decay
-        return loss,cross_entropy
+        return loss, cross_entropy
 
     def _train(self, global_step, loss):
         # Variables that affect learning rate.
@@ -308,8 +302,9 @@ class Evaluator:
 
         # Build a Graph that trains the model with one batch of examples and
         # updates the model parameters.
-        train_op = tf.train.MomentumOptimizer(lr, self.momentum_rate, use_nesterov=True).minimize(loss,global_step=global_step)
-        return train_op,lr
+        train_op = tf.train.MomentumOptimizer(lr, self.momentum_rate, use_nesterov=True).minimize(loss,
+                                                                                                  global_step=global_step)
+        return train_op, lr
 
     def evaluate(self, graph_part, cell_list, pre_block=[], is_bestNN=False, update_pre_weight=False):
         '''Method for evaluate the given network.
@@ -321,7 +316,7 @@ class Evaluator:
             update_pre_weight: Symbol for indicating whether to update previous blocks' weight, default by False.
         Returns:
             Accuracy'''
-        #TODO function is still too long, need to be splited
+        # TODO function is still too long, need to be splited
         if self.train_num < self.batch_size:
             print("Wrong! The data added in train dataset is smaller than batch size!")
             self.add_data(self.batch_size - self.train_num)
@@ -350,7 +345,7 @@ class Evaluator:
             # if it's the first block
             else:
                 x = tf.placeholder(tf.float32, [self.batch_size, self.IMAGE_SIZE, self.IMAGE_SIZE, 3], name='input')
-                labels = tf.placeholder(tf.int32, [self.batch_size,self.NUM_CLASSES], name="label")
+                labels = tf.placeholder(tf.int32, [self.batch_size, self.NUM_CLASSES], name="label")
                 input = x
 
             logits = self._inference(input, graph_part, cell_list, train_flag)
@@ -364,11 +359,11 @@ class Evaluator:
                 logits = tf.add(tf.matmul(logits, weights), biases, name=scope.name)
 
             # top_k_op = tf.nn.in_top_k(logits, labels, 1)
-            correct_prediction = tf.equal(tf.argmax(logits, 1), tf.argmax(labels,1))
+            correct_prediction = tf.equal(tf.argmax(logits, 1), tf.argmax(labels, 1))
             accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
-            loss,ce = self._loss(labels, logits)
-            train_op,lr = self._train(global_step, loss)
+            loss, cross_entropy = self._loss(labels, logits)
+            train_op, lr = self._train(global_step, loss)
 
             # Create a saver.
             saver = tf.train.Saver(tf.global_variables())
@@ -380,43 +375,32 @@ class Evaluator:
                     start_time = time.time()
                     batch_x = self.train_data[step * self.batch_size:step * self.batch_size + self.batch_size]
                     batch_y = self.train_label[step * self.batch_size:step * self.batch_size + self.batch_size]
-                    _, loss_value,lrt= sess.run([train_op, ce,lr],
+                    batch_x = DataSet().process(batch_x)
+                    _, loss_value = sess.run([train_op, cross_entropy],
                                              feed_dict={x: batch_x, labels: batch_y, train_flag: True})
 
                     assert not np.isnan(loss_value), 'Model diverged with loss = NaN'
 
                     if step % 100 == 0:
-                        format_str = ('step %d, loss = %.2f, learning rate=%.4f (%.3f sec)')
-                        print(format_str % (step, loss_value,lrt, float(time.time() - start_time)*100))
+                        format_str = ('step %d, loss = %.2f (%.3f sec)')
+                        print(format_str % (step, loss_value, float(time.time() - start_time) * 100))
 
                 if is_bestNN:  # Save the model
                     saver.save(sess, self.model_path + 'model_block' + str(self.blocks))
 
-                # Start the queue runners.
-                coord = tf.train.Coordinator()
-                try:
-                    threads = []
-                    for qr in tf.get_collection(tf.GraphKeys.QUEUE_RUNNERS):
-                        threads.extend(qr.create_threads(sess, coord=coord, daemon=True, start=True))
+                num_iter = self.NUM_EXAMPLES_PER_EPOCH_FOR_EVAL // self.batch_size
+                precision = 0
+                start_time = time.time()
+                for step in range(num_iter):
+                    batch_x = self.test_data[step * self.batch_size:(step + 1) * self.batch_size]
+                    batch_y = self.test_label[step * self.batch_size:(step + 1) * self.batch_size]
+                    l, acc_ = sess.run([cross_entropy, accuracy],
+                                       feed_dict={x: batch_x, labels: batch_y, train_flag: False})
+                    precision += acc_ / num_iter
+                    step += 1
 
-                    num_iter = self.NUM_EXAMPLES_PER_EPOCH_FOR_EVAL // self.batch_size
-                    step = 0
-                    start_time = time.time()
-                    precision=0
-                    while step < num_iter and not coord.should_stop():
-                        batch_x = self.test_data[step * self.batch_size:step * self.batch_size + self.batch_size]
-                        batch_y = self.test_label[step * self.batch_size:step * self.batch_size + self.batch_size]
-                        l, acc_ = sess.run([ce,accuracy], feed_dict={x: batch_x, labels: batch_y, train_flag: False})
-                        precision+=acc_/num_iter
-                        step += 1
-
-                    print('%d epoch: precision @ 1 = %.3f, cost time %.3f' % (ep,precision, float(time.time() - start_time)))
-
-                except Exception as e:
-                    coord.request_stop(e)
-
-                coord.request_stop()
-                coord.join(threads, stop_grace_period_secs=10)
+                print(
+                    '%d epoch: precision @ 1 = %.3f, cost time %.3f' % (ep, precision, float(time.time() - start_time)))
 
         return precision
 
@@ -428,7 +412,7 @@ class Evaluator:
         else:
             self.train_num += add_num
         # print('************A NEW ROUND************')
-        self.max_steps = self.train_num // self.batch_size-1
+        self.max_steps = self.train_num // self.batch_size - 1
         return 0
 
 
