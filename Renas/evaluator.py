@@ -17,7 +17,8 @@ class DataSet:
 
     def __init__(self):
         self.IMAGE_SIZE=32
-        self.NUM_EXAMPLES_FOR_TRAIN=40000
+        self.NUM_CLASSES=10
+        self.NUM_EXAMPLES_FOR_TRAIN=50000
         return
 
     def inputs(self):
@@ -41,7 +42,7 @@ class DataSet:
                 batch = pickle.load(fo, encoding='bytes')
             data = np.append(data, batch[b'data'], axis=0)
             label = np.append(label, batch[b'labels'], axis=0)
-        # label = np.array([[float(i == label) for i in range(self.NUM_CLASSES)] for label in label])
+        label = np.array([[float(i == label) for i in range(self.NUM_CLASSES)] for label in label])
         data = data.reshape([-1, 3, self.IMAGE_SIZE, self.IMAGE_SIZE])
         data = data.transpose([0, 2, 3, 1])
         # preprocess
@@ -60,13 +61,16 @@ class DataSet:
 
     def _normalize(self, x_train):
         x_train = x_train.astype('float32')
-        for i in range(3):
-            x_train[:, :, :, i] = (x_train[:, :, :, i] - np.mean(x_train[:, :, :, i])) / np.std(x_train[:, :, :, i])
+
+        x_train[:, :, :, 0] = (x_train[:, :, :, 0] - np.mean(x_train[:, :, :, 0])) / np.std(x_train[:, :, :, 0])
+        x_train[:, :, :, 1] = (x_train[:, :, :, 1] - np.mean(x_train[:, :, :, 1])) / np.std(x_train[:, :, :, 1])
+        x_train[:, :, :, 2] = (x_train[:, :, :, 2] - np.mean(x_train[:, :, :, 2])) / np.std(x_train[:, :, :, 2])
+
         return x_train
 
     def _process(self, x):
-        x = self._random_crop(x, [32, 32], 8)
         x = self._random_flip_leftright(x)
+        x = self._random_crop(x, [32, 32], 4)
         # x = self._cutout(x)
         return x
 
@@ -104,11 +108,11 @@ class DataSet:
 class Evaluator:
     def __init__(self):
         os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-        config=json.load(os.path.join(os.getcwd(),'nas_config.json'))
+        config=json.load(open(os.path.join(os.getcwd(),'nas_config.json')))
         # Global constants describing the CIFAR-10 data set.
         self.IMAGE_SIZE = 32
         self.NUM_CLASSES = 10
-        self.NUM_EXAMPLES_FOR_TRAIN = 40000
+        self.NUM_EXAMPLES_FOR_TRAIN = 50000
         self.NUM_EXAMPLES_PER_EPOCH_FOR_EVAL = 10000
         # Constants describing the training process.
         self.INITIAL_LEARNING_RATE = config['INITIAL_LEARNING_RATE']  # Initial learning rate.
@@ -125,7 +129,7 @@ class Evaluator:
         self.max_steps = 0
         self.blocks = 0
         self.train_data, self.train_label, self.valid_data, self.valid_label, \
-        self.test_data, self.test_data = DataSet().inputs()
+        self.test_data, self.test_label = DataSet().inputs()
 
     def _batch_norm(self, input, train_flag):
         # return input
@@ -147,7 +151,7 @@ class Evaluator:
             inputdim = inputs.shape[3]
             assert type(hplist[2]) == type(1), 'Wrong type of filter size: %s.' % str(type(hplist[2]))
             kernel = tf.get_variable('weights', shape=[hplist[2], hplist[2], inputdim, hplist[1]],
-                                     initializer=tf.truncated_normal_initializer(stddev=0.1))
+                                     initializer=tf.contrib.keras.initializers.he_normal())
             conv = tf.nn.conv2d(inputs, kernel, [1, 1, 1, 1], padding='SAME')
             biases = tf.get_variable('biases', hplist[1], initializer=tf.constant_initializer(0.0))
             bias = self._batch_norm(tf.nn.bias_add(conv, biases), train_flag)
@@ -278,17 +282,17 @@ class Evaluator:
             Loss tensor of type float.
           """
         # Reshape the labels into a dense Tensor of shape [self.batch_size, self.NUM_CLASSES].
-        sparse_labels = tf.reshape(labels, [self.batch_size, 1])
-        indices = tf.reshape(tf.range(self.batch_size), [self.batch_size, 1])
-        concated = tf.concat([indices, sparse_labels], 1)
-        dense_labels = tf.sparse_to_dense(concated,
-                                          [self.batch_size, self.NUM_CLASSES],
-                                          1.0, 0.0)
+        # sparse_labels = tf.reshape(labels, [self.batch_size, 1])
+        # indices = tf.reshape(tf.range(self.batch_size), [self.batch_size, 1])
+        # concated = tf.concat([indices, sparse_labels], 1)
+        # dense_labels = tf.sparse_to_dense(concated,
+        #                                   [self.batch_size, self.NUM_CLASSES],
+        #                                   1.0, 0.0)
         # Calculate loss.
-        cross_entropy = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=dense_labels, logits=logits))
+        cross_entropy = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=labels, logits=logits))
         l2 = tf.add_n([tf.nn.l2_loss(var) for var in tf.trainable_variables()])
         loss = cross_entropy + l2 * self.weight_decay
-        return loss
+        return loss,cross_entropy
 
     def _train(self, global_step, loss):
         # Variables that affect learning rate.
@@ -346,7 +350,7 @@ class Evaluator:
             # if it's the first block
             else:
                 x = tf.placeholder(tf.float32, [self.batch_size, self.IMAGE_SIZE, self.IMAGE_SIZE, 3], name='input')
-                labels = tf.placeholder(tf.int32, [self.batch_size], name="label")
+                labels = tf.placeholder(tf.int32, [self.batch_size,self.NUM_CLASSES], name="label")
                 input = x
 
             logits = self._inference(input, graph_part, cell_list, train_flag)
@@ -359,8 +363,11 @@ class Evaluator:
                                          initializer=tf.constant_initializer(0.0))
                 logits = tf.add(tf.matmul(logits, weights), biases, name=scope.name)
 
-            top_k_op = tf.nn.in_top_k(logits, labels, 1)
-            loss = self._loss(labels, logits)
+            # top_k_op = tf.nn.in_top_k(logits, labels, 1)
+            correct_prediction = tf.equal(tf.argmax(logits, 1), tf.argmax(labels,1))
+            accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+
+            loss,ce = self._loss(labels, logits)
             train_op,lr = self._train(global_step, loss)
 
             # Create a saver.
@@ -373,7 +380,7 @@ class Evaluator:
                     start_time = time.time()
                     batch_x = self.train_data[step * self.batch_size:step * self.batch_size + self.batch_size]
                     batch_y = self.train_label[step * self.batch_size:step * self.batch_size + self.batch_size]
-                    _, loss_value,lrt = sess.run([train_op, loss,lr],
+                    _, loss_value,lrt= sess.run([train_op, ce,lr],
                                              feed_dict={x: batch_x, labels: batch_y, train_flag: True})
 
                     assert not np.isnan(loss_value), 'Model diverged with loss = NaN'
@@ -393,18 +400,16 @@ class Evaluator:
                         threads.extend(qr.create_threads(sess, coord=coord, daemon=True, start=True))
 
                     num_iter = self.NUM_EXAMPLES_PER_EPOCH_FOR_EVAL // self.batch_size
-                    true_count = 0  # Counts the number of correct predictions.
-                    total_sample_count = num_iter * self.batch_size
                     step = 0
                     start_time = time.time()
+                    precision=0
                     while step < num_iter and not coord.should_stop():
-                        batch_x = self.valid_data[step * self.batch_size:step * self.batch_size + self.batch_size]
-                        batch_y = self.valid_label[step * self.batch_size:step * self.batch_size + self.batch_size]
-                        predictions = sess.run([top_k_op], feed_dict={x: batch_x, labels: batch_y, train_flag: True})
-                        true_count += np.sum(predictions)
+                        batch_x = self.test_data[step * self.batch_size:step * self.batch_size + self.batch_size]
+                        batch_y = self.test_label[step * self.batch_size:step * self.batch_size + self.batch_size]
+                        l, acc_ = sess.run([ce,accuracy], feed_dict={x: batch_x, labels: batch_y, train_flag: False})
+                        precision+=acc_/num_iter
                         step += 1
 
-                    precision = true_count / total_sample_count
                     print('%d epoch: precision @ 1 = %.3f, cost time %.3f' % (ep,precision, float(time.time() - start_time)))
 
                 except Exception as e:
@@ -423,7 +428,7 @@ class Evaluator:
         else:
             self.train_num += add_num
         # print('************A NEW ROUND************')
-        self.max_steps = self.train_num // self.batch_size
+        self.max_steps = self.train_num // self.batch_size-1
         return 0
 
 
@@ -439,16 +444,16 @@ if __name__ == '__main__':
     # cellist=[('conv', 128, 1, 'relu'), ('conv', 32, 1, 'relu'), ('conv', 256, 1, 'relu'), ('pooling', 'max', 2), ('pooling', 'global', 3), ('conv', 32, 1, 'relu')]
     # cellist=[('pooling', 'global', 2), ('pooling', 'max', 3), ('conv', 21, 32, 'leakyrelu'), ('conv', 16, 32, 'leakyrelu'), ('pooling', 'max', 3), ('conv', 16, 32, 'leakyrelu')]
 
-    graph_full = [[1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15], [16], [17],
-                  []]
+    graph_part = [[1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15], [16], [17], []]
     cell_list = [('conv', 64, 3, 'relu'), ('conv', 64, 3, 'relu'), ('pooling', 'max', 2), ('conv', 128, 3, 'relu'),
                  ('conv', 128, 3, 'relu'), ('pooling', 'max', 2), ('conv', 256, 3, 'relu'),
                  ('conv', 256, 3, 'relu'), ('conv', 256, 3, 'relu'), ('pooling', 'max', 2),
                  ('conv', 512, 3, 'relu'), ('conv', 512, 3, 'relu'), ('conv', 512, 3, 'relu'),
                  ('pooling', 'max', 2), ('conv', 512, 3, 'relu'), ('conv', 512, 3, 'relu'),
                  ('conv', 512, 3, 'relu'), ('dense', [4096, 4096, 1000], 'relu')]
+
     cell_list = [cell_list]
     # pre_block=[graph_full, cell_list[-1]]
-    e = eval.evaluate(graph_full, cell_list[-1])  # , update_pre_weight=True)
+    e = eval.evaluate(graph_part, cell_list[-1])  # , update_pre_weight=True)
     # e=eval.train(network.graph_full,cellist)
     print(e)
