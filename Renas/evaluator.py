@@ -8,31 +8,16 @@ import numpy as np
 import tensorflow as tf
 import pickle
 import random
-
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+import json
 
 data_path = '/home/amax/Desktop'
-
-# Global constants describing the CIFAR-10 data set.
-IMAGE_SIZE = 32
-NUM_CLASSES = 10
-NUM_EXAMPLES_FOR_TRAIN = 40000
-NUM_EXAMPLES_PER_EPOCH_FOR_EVAL = 10000
-# Constants describing the training process.
-INITIAL_LEARNING_RATE = 0.1  # Initial learning rate.
-NUM_EPOCHS_PER_DECAY = 80.0  # Epochs after which learning rate decays.
-LEARNING_RATE_DECAY_FACTOR = 0.1  # Learning rate decay factor.
-MOVING_AVERAGE_DECAY = 0.98
-batch_size = 64
-epoch = 200
-weight_decay = 0.0003
-momentum_rate = 0.9
-model_path = 'model'
 
 
 class DataSet:
 
     def __init__(self):
+        self.IMAGE_SIZE=32
+        self.NUM_EXAMPLES_FOR_TRAIN=40000
         return
 
     def inputs(self):
@@ -56,8 +41,8 @@ class DataSet:
                 batch = pickle.load(fo, encoding='bytes')
             data = np.append(data, batch[b'data'], axis=0)
             label = np.append(label, batch[b'labels'], axis=0)
-        # label = np.array([[float(i == label) for i in range(NUM_CLASSES)] for label in label])
-        data = data.reshape([-1, 3, IMAGE_SIZE, IMAGE_SIZE])
+        # label = np.array([[float(i == label) for i in range(self.NUM_CLASSES)] for label in label])
+        data = data.reshape([-1, 3, self.IMAGE_SIZE, self.IMAGE_SIZE])
         data = data.transpose([0, 2, 3, 1])
         # preprocess
         data = self._normalize(data)
@@ -70,8 +55,8 @@ class DataSet:
         return data, label
 
     def _split(self, data, label):
-        return data[:NUM_EXAMPLES_FOR_TRAIN], label[:NUM_EXAMPLES_FOR_TRAIN], \
-               data[NUM_EXAMPLES_FOR_TRAIN:], label[NUM_EXAMPLES_FOR_TRAIN:]
+        return data[:self.NUM_EXAMPLES_FOR_TRAIN], label[:self.NUM_EXAMPLES_FOR_TRAIN], \
+               data[self.NUM_EXAMPLES_FOR_TRAIN:], label[self.NUM_EXAMPLES_FOR_TRAIN:]
 
     def _normalize(self, x_train):
         x_train = x_train.astype('float32')
@@ -82,7 +67,7 @@ class DataSet:
     def _process(self, x):
         x = self._random_crop(x, [32, 32], 8)
         x = self._random_flip_leftright(x)
-        x = self._cutout(x)
+        # x = self._cutout(x)
         return x
 
     def _random_crop(self, batch, crop_shape, padding=None):
@@ -110,14 +95,31 @@ class DataSet:
 
     def _cutout(self, x):
         for i in range(len(x)):
-            cut_size = random.randint(0, IMAGE_SIZE // 2)
-            s = random.randint(0, IMAGE_SIZE - cut_size)
+            cut_size = random.randint(0, self.IMAGE_SIZE // 2)
+            s = random.randint(0, self.IMAGE_SIZE - cut_size)
             x[i, s:s + cut_size, s:s + cut_size, :] = 0
         return x
 
 
 class Evaluator:
     def __init__(self):
+        os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+        config=json.load(os.path.join(os.getcwd(),'nas_config.json'))
+        # Global constants describing the CIFAR-10 data set.
+        self.IMAGE_SIZE = 32
+        self.NUM_CLASSES = 10
+        self.NUM_EXAMPLES_FOR_TRAIN = 40000
+        self.NUM_EXAMPLES_PER_EPOCH_FOR_EVAL = 10000
+        # Constants describing the training process.
+        self.INITIAL_LEARNING_RATE = config['INITIAL_LEARNING_RATE']  # Initial learning rate.
+        self.NUM_EPOCHS_PER_DECAY = config['NUM_EPOCHS_PER_DECAY']  # Epochs after which learning rate decays.
+        self.LEARNING_RATE_DECAY_FACTOR = config['LEARNING_RATE_DECAY_FACTOR']  # Learning rate decay factor.
+        self.MOVING_AVERAGE_DECAY = config['MOVING_AVERAGE_DECAY']
+        self.batch_size = config['batch_size']
+        self.epoch = config['epoch']
+        self.weight_decay = config['weight_decay']
+        self.momentum_rate = config['momentum_rate']
+        self.model_path = config['model_path']
         self.train_num = 0
         self.network_num = 0
         self.max_steps = 0
@@ -192,7 +194,7 @@ class Evaluator:
                    tensor.
         """
         i = 0
-        inputs = tf.reshape(inputs, [batch_size, -1])
+        inputs = tf.reshape(inputs, [self.batch_size, -1])
 
         for neural_num in hplist[1]:
             with tf.variable_scope('dense' + str(i)) as scope:
@@ -270,39 +272,39 @@ class Evaluator:
         """
           Args:
             logits: Logits from softmax.
-            labels: Labels from distorted_inputs or inputs(). 1-D tensor of shape [batch_size]
+            labels: Labels from distorted_inputs or inputs(). 1-D tensor of shape [self.batch_size]
 
           Returns:
             Loss tensor of type float.
           """
-        # Reshape the labels into a dense Tensor of shape [batch_size, NUM_CLASSES].
-        sparse_labels = tf.reshape(labels, [batch_size, 1])
-        indices = tf.reshape(tf.range(batch_size), [batch_size, 1])
+        # Reshape the labels into a dense Tensor of shape [self.batch_size, self.NUM_CLASSES].
+        sparse_labels = tf.reshape(labels, [self.batch_size, 1])
+        indices = tf.reshape(tf.range(self.batch_size), [self.batch_size, 1])
         concated = tf.concat([indices, sparse_labels], 1)
         dense_labels = tf.sparse_to_dense(concated,
-                                          [batch_size, NUM_CLASSES],
+                                          [self.batch_size, self.NUM_CLASSES],
                                           1.0, 0.0)
         # Calculate loss.
         cross_entropy = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=dense_labels, logits=logits))
         l2 = tf.add_n([tf.nn.l2_loss(var) for var in tf.trainable_variables()])
-        loss = cross_entropy + l2 * weight_decay
+        loss = cross_entropy + l2 * self.weight_decay
         return loss
 
     def _train(self, global_step, loss):
         # Variables that affect learning rate.
-        num_batches_per_epoch = self.train_num / batch_size
-        decay_steps = int(num_batches_per_epoch * NUM_EPOCHS_PER_DECAY)
+        num_batches_per_epoch = self.train_num / self.batch_size
+        decay_steps = int(num_batches_per_epoch * self.NUM_EPOCHS_PER_DECAY)
 
         # Decay the learning rate exponentially based on the number of steps.
-        lr = tf.train.exponential_decay(INITIAL_LEARNING_RATE,
+        lr = tf.train.exponential_decay(self.INITIAL_LEARNING_RATE,
                                         global_step,
                                         decay_steps,
-                                        LEARNING_RATE_DECAY_FACTOR,
+                                        self.LEARNING_RATE_DECAY_FACTOR,
                                         staircase=True)
 
         # Build a Graph that trains the model with one batch of examples and
         # updates the model parameters.
-        train_op = tf.train.MomentumOptimizer(lr, momentum_rate, use_nesterov=True).minimize(loss,global_step=global_step)
+        train_op = tf.train.MomentumOptimizer(lr, self.momentum_rate, use_nesterov=True).minimize(loss,global_step=global_step)
         return train_op,lr
 
     def evaluate(self, graph_part, cell_list, pre_block=[], is_bestNN=False, update_pre_weight=False):
@@ -315,9 +317,10 @@ class Evaluator:
             update_pre_weight: Symbol for indicating whether to update previous blocks' weight, default by False.
         Returns:
             Accuracy'''
-        if self.train_num < batch_size:
+        #TODO function is still too long, need to be splited
+        if self.train_num < self.batch_size:
             print("Wrong! The data added in train dataset is smaller than batch size!")
-            self.add_data(batch_size - self.train_num)
+            self.add_data(self.batch_size - self.train_num)
             print("Default add batch size picture to the train dataset.")
         self.block_num = len(pre_block)
 
@@ -329,8 +332,8 @@ class Evaluator:
             # if it got previous blocks
             if self.block_num > 0:
                 new_saver = tf.train.import_meta_graph(
-                    os.path.join(model_path, 'model_block' + str(self.blocks - 1) + '.meta'))
-                new_saver.restore(sess, tf.train.latest_checkpoint(model_path))
+                    os.path.join(self.model_path, 'model_block' + str(self.blocks - 1) + '.meta'))
+                new_saver.restore(sess, tf.train.latest_checkpoint(self.model_path))
                 graph = tf.get_default_graph()
                 x = graph.get_tensor_by_name("input:0")
                 labels = graph.get_tensor_by_name("label:0")
@@ -342,17 +345,17 @@ class Evaluator:
                     input = tf.stop_gradient(input, name="stop_gradient")
             # if it's the first block
             else:
-                x = tf.placeholder(tf.float32, [batch_size, IMAGE_SIZE, IMAGE_SIZE, 3], name='input')
-                labels = tf.placeholder(tf.int32, [batch_size], name="label")
+                x = tf.placeholder(tf.float32, [self.batch_size, self.IMAGE_SIZE, self.IMAGE_SIZE, 3], name='input')
+                labels = tf.placeholder(tf.int32, [self.batch_size], name="label")
                 input = x
 
             logits = self._inference(input, graph_part, cell_list, train_flag)
             # softmax
-            logits = tf.reshape(logits, [batch_size, -1])
+            logits = tf.reshape(logits, [self.batch_size, -1])
             with tf.variable_scope('lastdense' + str(self.block_num)) as scope:
-                weights = tf.get_variable('weights' + str(self.block_num), shape=[logits.shape[-1], NUM_CLASSES],
+                weights = tf.get_variable('weights' + str(self.block_num), shape=[logits.shape[-1], self.NUM_CLASSES],
                                           initializer=tf.truncated_normal_initializer(stddev=0.04))
-                biases = tf.get_variable('biases' + str(self.block_num), shape=[NUM_CLASSES],
+                biases = tf.get_variable('biases' + str(self.block_num), shape=[self.NUM_CLASSES],
                                          initializer=tf.constant_initializer(0.0))
                 logits = tf.add(tf.matmul(logits, weights), biases, name=scope.name)
 
@@ -365,11 +368,11 @@ class Evaluator:
             # Start running operations on the Graph.
             sess.run(tf.global_variables_initializer())
 
-            for ep in range(epoch):
+            for ep in range(self.epoch):
                 for step in range(self.max_steps):
                     start_time = time.time()
-                    batch_x = self.train_data[step * batch_size:step * batch_size + batch_size]
-                    batch_y = self.train_label[step * batch_size:step * batch_size + batch_size]
+                    batch_x = self.train_data[step * self.batch_size:step * self.batch_size + self.batch_size]
+                    batch_y = self.train_label[step * self.batch_size:step * self.batch_size + self.batch_size]
                     _, loss_value,lrt = sess.run([train_op, loss,lr],
                                              feed_dict={x: batch_x, labels: batch_y, train_flag: True})
 
@@ -380,7 +383,7 @@ class Evaluator:
                         print(format_str % (step, loss_value,lrt, float(time.time() - start_time)*100))
 
                 if is_bestNN:  # Save the model
-                    saver.save(sess, model_path + 'model_block' + str(self.blocks))
+                    saver.save(sess, self.model_path + 'model_block' + str(self.blocks))
 
                 # Start the queue runners.
                 coord = tf.train.Coordinator()
@@ -389,20 +392,20 @@ class Evaluator:
                     for qr in tf.get_collection(tf.GraphKeys.QUEUE_RUNNERS):
                         threads.extend(qr.create_threads(sess, coord=coord, daemon=True, start=True))
 
-                    num_iter = NUM_EXAMPLES_PER_EPOCH_FOR_EVAL // batch_size
+                    num_iter = self.NUM_EXAMPLES_PER_EPOCH_FOR_EVAL // self.batch_size
                     true_count = 0  # Counts the number of correct predictions.
-                    total_sample_count = num_iter * batch_size
+                    total_sample_count = num_iter * self.batch_size
                     step = 0
                     start_time = time.time()
                     while step < num_iter and not coord.should_stop():
-                        batch_x = self.valid_data[step * batch_size:step * batch_size + batch_size]
-                        batch_y = self.valid_label[step * batch_size:step * batch_size + batch_size]
+                        batch_x = self.valid_data[step * self.batch_size:step * self.batch_size + self.batch_size]
+                        batch_y = self.valid_label[step * self.batch_size:step * self.batch_size + self.batch_size]
                         predictions = sess.run([top_k_op], feed_dict={x: batch_x, labels: batch_y, train_flag: True})
                         true_count += np.sum(predictions)
                         step += 1
 
                     precision = true_count / total_sample_count
-                    print('%d epoch:precision @ 1 = %.3f, cost time %.3f' % (ep,precision, float(time.time() - start_time)))
+                    print('%d epoch: precision @ 1 = %.3f, cost time %.3f' % (ep,precision, float(time.time() - start_time)))
 
                 except Exception as e:
                     coord.request_stop(e)
@@ -413,14 +416,14 @@ class Evaluator:
         return precision
 
     def add_data(self, add_num=0):
-        if self.train_num + add_num > NUM_EXAMPLES_FOR_TRAIN or add_num < 0:
-            add_num = NUM_EXAMPLES_FOR_TRAIN - self.train_num
-            self.train_num = NUM_EXAMPLES_FOR_TRAIN
+        if self.train_num + add_num > self.NUM_EXAMPLES_FOR_TRAIN or add_num < 0:
+            add_num = self.NUM_EXAMPLES_FOR_TRAIN - self.train_num
+            self.train_num = self.NUM_EXAMPLES_FOR_TRAIN
             print('Warning! Add number has been changed to ', add_num, ', all data is loaded.')
         else:
             self.train_num += add_num
         # print('************A NEW ROUND************')
-        self.max_steps = self.train_num // batch_size
+        self.max_steps = self.train_num // self.batch_size
         return 0
 
 
