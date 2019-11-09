@@ -4,7 +4,7 @@ import numpy as np
 import tensorflow as tf
 import pickle
 import random
-import json
+from info_str import NAS_CONFIG
 
 data_path = '/data/data'
 
@@ -103,22 +103,21 @@ class DataSet:
 class Evaluator:
     def __init__(self):
         os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-        config = json.load(open(os.path.join(os.getcwd(), 'nas_config.json')))
         # Global constants describing the CIFAR-10 data set.
         self.IMAGE_SIZE = 32
         self.NUM_CLASSES = 10
         self.NUM_EXAMPLES_FOR_TRAIN = 50000
         self.NUM_EXAMPLES_PER_EPOCH_FOR_EVAL = 10000
         # Constants describing the training process.
-        self.INITIAL_LEARNING_RATE = config['INITIAL_LEARNING_RATE']  # Initial learning rate.
-        self.NUM_EPOCHS_PER_DECAY = config['NUM_EPOCHS_PER_DECAY']  # Epochs after which learning rate decays.
-        self.LEARNING_RATE_DECAY_FACTOR = config['LEARNING_RATE_DECAY_FACTOR']  # Learning rate decay factor.
-        self.MOVING_AVERAGE_DECAY = config['MOVING_AVERAGE_DECAY']
-        self.batch_size = config['batch_size']
-        self.epoch = config['epoch']
-        self.weight_decay = config['weight_decay']
-        self.momentum_rate = config['momentum_rate']
-        self.model_path = config['model_path']
+        self.INITIAL_LEARNING_RATE = NAS_CONFIG['eva']['INITIAL_LEARNING_RATE']  # Initial learning rate.
+        self.NUM_EPOCHS_PER_DECAY = NAS_CONFIG['eva']['NUM_EPOCHS_PER_DECAY']  # Epochs after which learning rate decays.
+        self.LEARNING_RATE_DECAY_FACTOR = NAS_CONFIG['eva']['LEARNING_RATE_DECAY_FACTOR']  # Learning rate decay factor.
+        self.MOVING_AVERAGE_DECAY = NAS_CONFIG['eva']['MOVING_AVERAGE_DECAY']
+        self.batch_size = NAS_CONFIG['eva']['batch_size']
+        self.epoch = NAS_CONFIG['eva']['epoch']
+        self.weight_decay = NAS_CONFIG['eva']['weight_decay']
+        self.momentum_rate = NAS_CONFIG['eva']['momentum_rate']
+        self.model_path = NAS_CONFIG['eva']['model_path']
         self.train_num = 0
         self.network_num = 0
         self.max_steps = 0
@@ -308,13 +307,9 @@ class Evaluator:
         Returns:
             Accuracy'''
         # TODO function is still too long, need to be splited
-        if self.train_num < self.batch_size:
-            print("Wrong! The data added in train dataset is smaller than batch size!")
-            self.add_data(self.batch_size - self.train_num)
-            print("Default add batch size picture to the train dataset.")
+        assert self.train_num >= self.batch_size, "Wrong! The data added in train dataset is smaller than batch size!"
         self.block_num = len(pre_block)
 
-        """Train CIFAR-10 for a number of steps."""
         with tf.Session() as sess:
             global_step = tf.Variable(0, trainable=False)
             train_flag = tf.placeholder(tf.bool)
@@ -355,6 +350,7 @@ class Evaluator:
             sess.run(tf.global_variables_initializer())
 
             for ep in range(self.epoch):
+                # train step
                 for step in range(self.max_steps):
                     start_time = time.time()
                     batch_x = self.train_data[step * self.batch_size:step * self.batch_size + self.batch_size]
@@ -369,6 +365,7 @@ class Evaluator:
                         format_str = ('step %d, loss = %.2f (%.3f sec)')
                         print(format_str % (step, loss_value, float(time.time() - start_time) * 100))
 
+                # evaluation step
                 num_iter = self.NUM_EXAMPLES_PER_EPOCH_FOR_EVAL // self.batch_size
                 precision = 0
                 start_time = time.time()
@@ -380,8 +377,7 @@ class Evaluator:
                     precision += acc_ / num_iter
                     step += 1
 
-                print(
-                    '%d epoch: precision @ 1 = %.3f, cost time %.3f' % (ep, precision, float(time.time() - start_time)))
+                print('%d epoch: precision = %.3f, cost time %.3f' % (ep, precision, float(time.time() - start_time)))
 
             if is_bestNN:  # Save the model
                 saver.save(sess, self.model_path + 'model_block' + str(self.blocks))
