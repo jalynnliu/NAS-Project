@@ -40,18 +40,17 @@ class Enumerater:
     def __init__(self):
         self.depth = NAS_CONFIG['enum']['depth']
         self.width = NAS_CONFIG['enum']['width']
-        self.max_branch_depth = NAS_CONFIG['enum']['max_depth']
+        self.max_depth = NAS_CONFIG['enum']['max_depth']
         self._info_dict = {}
         self._info_group = []
         self._log = ""
-        self._pickle_name = 'pcache\\enum_%d-%d-%d.pickle' % (self.depth, self.width, self.max_branch_depth)
+        self._pickle_name = 'pcache\\enum_%d-%d-%d.pickle' % (self.depth, self.width, self.max_depth)
 
     def enumerate(self):
         """
         The main function of generating network topology.
         No Args.
-        Retruns:
-            1. pool (1d Network list)
+        Retruns: pool (1d Network list)
         """
         pool = _read_pool(self._pickle_name)
 
@@ -78,7 +77,7 @@ class Enumerater:
                 if j <= i + 1:
                     continue
                 for k in range(1, j-i):
-                    if k <= self.max_branch_depth:
+                    if k <= self.max_depth:
                         # print(i,j,k)
                         self._info_dict[cnt] = [i, j, k]
                         cnt += 1
