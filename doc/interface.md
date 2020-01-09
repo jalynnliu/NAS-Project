@@ -206,12 +206,12 @@
     >
     > **Returns**:
     > 1. *Score* (float, 0 ~ 1.0)
-+ set_data_size
++ _set_data_size
     > **Args**:
     > 1. *num* (int, *batch_size* ~ *num_examples_per_epoch_for_train* - *self.train_num*)
     >
     > **Returns**: None
-+ set_epoch
++ _set_epoch
     > **Args**:
     > 1. *epoch* (int)
     >
