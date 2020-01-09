@@ -25,6 +25,11 @@ class DataSet:
         return
 
     def inputs(self):
+        '''
+                Method for load data
+                        Returns:
+                          train_data, train_label, valid_data, valid_label, test_data, test_label
+                '''
         print("======Loading data======")
         if self.task == 'cifar-10':
             test_files = ['test_batch']
@@ -87,6 +92,13 @@ class DataSet:
         return x_train
 
     def process(self, x):
+        '''
+                Method for processing data
+                    Args:
+                        x: data needs processing
+                    Returns:
+                        x: data that has been processed
+                '''
         x = self._random_flip_leftright(x)
         x = self._random_crop(x, [32, 32], 4)
         x = self._cutout(x)
@@ -144,7 +156,7 @@ class Evaluator:
         self.weight_decay = 0.0003
         self.momentum_rate = 0.9
 
-    def set_epoch(self, e):
+    def _set_epoch(self, e):
         self.epoch = e
         return
 
@@ -378,6 +390,11 @@ class Evaluator:
         return precision
 
     def retrain(self, pre_block):
+        '''
+        Method for retrain the whole network
+        :param pre_block:
+        :return:
+        '''
         tf.reset_default_graph()
         self.train_num = 50000
         self.block_num = len(pre_block)
@@ -448,7 +465,7 @@ class Evaluator:
                 new_graph.append([x + add for x in sub_list])
         return new_graph, new_cell_list
 
-    def _eval(self, sess, logits, data_x, data_y, train_flag, retrain=False):
+    def eval(self, sess, logits, data_x, data_y, train_flag, retrain=False):
         # TODO change here to run training step and evaluation step
         """
         The actual training process, including the definination of loss and train optimizer
@@ -582,7 +599,7 @@ class Evaluator:
         flops, model_size = self._stats_graph()
         return precision + 1 / time + 1 / flops + 1 / model_size
 
-    def set_data_size(self, num):
+    def _set_data_size(self, num):
         if num > len(list(self.train_label)) or num < 0:
             num = len(list(self.train_label))
             print('Warning! Data size has been changed to', num, ', all data is loaded.')

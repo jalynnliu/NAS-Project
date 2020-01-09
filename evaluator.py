@@ -23,6 +23,13 @@ class DataSet:
         return train_data, train_label, test_data, test_label
 
     def process(self, x):
+        '''
+        Method for processing data
+            Args:
+                x: data needs processing
+            Returns:
+                x: data that has been processed
+        '''
         return x
 
 
@@ -41,7 +48,7 @@ class Evaluator:
         self.train_data, self.train_label, self.test_data, self.test_label = DataSet().inputs()
         return
 
-    def set_epoch(self, e):
+    def _set_epoch(self, e):
         self.epoch = e
         return
 
@@ -268,7 +275,7 @@ class Evaluator:
                 cell_list = cell_list + [Cell('id', 'max', 1)]
             logits = self._inference(block_input, graph_full, cell_list, train_flag)
 
-            precision, log = self._eval(sess, logits, data_x, data_y, train_flag)
+            precision, log = self.eval(sess, logits, data_x, data_y, train_flag)
             self.log += log
 
             saver = tf.train.Saver(tf.global_variables())
@@ -315,7 +322,7 @@ class Evaluator:
                 new_graph.append([x + add for x in sub_list])
         return new_graph, new_cell_list
 
-    def _eval(self, sess, logits, data_x, data_y, *args, **kwargs):
+    def eval(self, sess, logits, data_x, data_y, *args, **kwargs):
         # TODO change here to run training step and evaluation step
         """
         The actual training process, including the definination of loss and train optimizer
@@ -373,7 +380,7 @@ class Evaluator:
         # TODO change here for target calculating
         return target
 
-    def set_data_size(self, num):
+    def _set_data_size(self, num):
         if num > len(list(self.train_label)) or num < 0:
             num = len(list(self.train_label))
             print('Warning! Data size has been changed to', num, ', all data is loaded.')
