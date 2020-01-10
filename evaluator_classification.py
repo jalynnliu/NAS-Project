@@ -238,6 +238,19 @@ class Evaluator:
 
         return layer
 
+    def _name_your_function_here(self, inputs, cell, node):
+        """
+        the operation defined by user,
+                Args:
+                    inputs: the input tensor of this operation
+                    cell: Class Cell(), hyper parameters for building this layer
+                    node: int, the index of this operation
+                Returns:
+                    layer: the output tensor
+                """
+        # TODO add your function here if any new operation was added, see _makeconv as an example
+        return
+
     def _makeconv(self, x, hplist, node, train_flag):
         """Generates a convolutional layer according to information in hplist
         Args:
@@ -337,11 +350,31 @@ class Evaluator:
 
     def _pad(self, inputs, layer):
         # padding
-        a = tf.shape(layer)[1]
-        b = tf.shape(inputs)[1]
-        pad = tf.abs(tf.subtract(a, b))
-        output = tf.where(tf.greater(a, b), tf.concat([tf.pad(inputs, [[0, 0], [0, pad], [0, pad], [0, 0]]), layer], 3),
-                          tf.concat([inputs, tf.pad(layer, [[0, 0], [0, pad], [0, pad], [0, 0]])], 3))
+        if self.input_shape[1]:
+            a = int(layer.shape[1])
+            b = int(inputs.shape[1])
+            pad = abs(a - b)
+            if layer.shape[1] > inputs.shape[1]:
+                tmp = tf.pad(inputs, [[0, 0], [0, pad], [0, pad], [0, 0]])
+                output = tf.concat([tmp, layer], 3)
+            elif layer.shape[1] < inputs.shape[1]:
+                tmp = tf.pad(layer, [[0, 0], [0, pad], [0, pad], [0, 0]])
+                output = tf.concat([inputs, tmp], 3)
+            else:
+                output = tf.concat([inputs, layer], 3)
+        else:
+            a = tf.shape(layer)[1]
+            b = tf.shape(inputs)[1]
+            pad = tf.abs(tf.subtract(a, b))
+            cond = tf.greater(a, b)
+
+            def f1():
+                return tf.concat([tf.pad(inputs, [[0, 0], [0, pad], [0, pad], [0, 0]]), layer], 3)
+
+            def f2():
+                return tf.concat([inputs, tf.pad(layer, [[0, 0], [0, pad], [0, pad], [0, 0]])], 3)
+
+            output = tf.cond(cond, f1, f2)
         return output
 
     def evaluate(self, network, pre_block=[], is_bestNN=False, update_pre_weight=False):
@@ -362,21 +395,22 @@ class Evaluator:
             self.log = self.log + str(block.graph) + str(block.cell_list) + '\n'
         self.log = self.log + str(network.graph) + str(network.cell_list) + '\n'
 
-
-        with tf.Session() as sess:
+        config = tf.ConfigProto()
+        config.gpu_options.allow_growth = True
+        with tf.Session(config=config) as sess:
             data_x, data_y, block_input, train_flag = self._get_input(sess, pre_block, update_pre_weight)
 
             graph_full, cell_list = self._recode(network.graph, network.cell_list,
                                                  NAS_CONFIG['nas_main']['repeat_num'])
-            # a pooling layer for last repeat block
             graph_full = graph_full + [[]]
-            cell_list = cell_list + [Cell('pooling', 'max', 2)]
+            if NAS_CONFIG['nas_main']['link_node']:
+                # a pooling layer for last repeat block
+                cell_list = cell_list + [Cell('pooling', 'max', 2)]
+            else:
+                cell_list = cell_list + [Cell('id', 'max', 1)]
             logits = self._inference(block_input, graph_full, cell_list, train_flag)
 
-            logits = tf.nn.dropout(logits, keep_prob=1.0)
-            logits = self._makedense(logits, ('', [self.output_shape[-1]], ''))
-
-            precision, log = self._eval(sess, data_x, data_y, logits, train_flag)
+            precision, log = self.eval(sess, logits, data_x, data_y, train_flag)
             self.log += log
 
             saver = tf.train.Saver(tf.global_variables())
@@ -397,7 +431,7 @@ class Evaluator:
         '''
         tf.reset_default_graph()
         self.train_num = 50000
-        self.block_num = len(pre_block)
+        self.block_num = len(pre_block) * NAS_CONFIG['nas_main']['repeat_num']
 
         retrain_log = "-" * 20 + "retrain" + "-" * 20 + '\n'
 
@@ -418,12 +452,9 @@ class Evaluator:
             retrain_log = retrain_log + str(graph_full) + str(cell_list) + '\n'
             block_input = self._inference(block_input, graph_full, cell_list, train_flag)
 
-        logits = tf.nn.dropout(block_input, keep_prob=1.0)
-        # softmax
-        logits = self._makedense(logits, ('', [256, self.output_shape[-1]], 'relu'))
-
         sess = tf.Session()
-        precision, log = self._eval(sess, data_x, labels, logits, train_flag, retrain=True)
+        precision, log = self.eval(sess, block_input, data_x, labels, train_flag, retrain=True)
+        sess.close()
         retrain_log += log
 
         NAS_LOG << ('eva', retrain_log)
@@ -433,9 +464,9 @@ class Evaluator:
         '''Get input for _inference'''
         # if it got previous blocks
         if len(pre_block) > 0:
-            assert os.path.exists(os.path.join(self.model_path, 'model' + str(pre_block[-1].id) + '.meta'))
-            new_saver = tf.train.import_meta_graph(
-                os.path.join(self.model_path, 'model' + str(pre_block[-1].id) + '.meta'))
+            tmp = os.path.join(self.model_path, 'model' + str(pre_block[-1].id) + '.meta')
+            assert os.path.exists(tmp)
+            new_saver = tf.train.import_meta_graph(tmp)
             new_saver.restore(sess, os.path.join(
                 self.model_path, 'model' + str(pre_block[-1].id)))
             graph = tf.get_default_graph()
@@ -480,7 +511,10 @@ class Evaluator:
             log: string, log to be write and saved
         """
         logits = tf.nn.dropout(logits, keep_prob=1.0)
-        logits = self._makedense(logits, ('', [self.output_shape[-1]], ''))
+        if retrain:
+            logits = self._makedense(logits, ('', [256, self.output_shape[-1]], 'relu'))
+        else:
+            logits = self._makedense(logits, ('', [self.output_shape[-1]], ''))
         global_step = tf.Variable(0, trainable=False, name='global_step' + str(self.block_num))
         accuracy = self._cal_accuracy(logits, data_y)
         loss = self._loss(data_y, logits)
@@ -612,8 +646,8 @@ class Evaluator:
 if __name__ == '__main__':
     os.environ["CUDA_VISIBLE_DEVICES"] = "1"
     eval = Evaluator()
-    eval.set_data_size(10000)
-    eval.set_epoch(10)
+    eval._set_data_size(10000)
+    eval._set_epoch(10)
     # graph_full = [[1], [2], [3], []]
     # cell_list = [Cell('conv', 64, 5, 'relu'), Cell('pooling', 'max', 3), Cell('conv', 64, 5, 'relu'),
     #              Cell('pooling', 'max', 3)]
@@ -628,10 +662,10 @@ if __name__ == '__main__':
     network2 = NetworkItem(1, graph_full, cell_list, "")
     e = eval.evaluate(network1, is_bestNN=True)
     print(e)
-    eval.set_data_size(10000)
+    eval._set_data_size(10000)
     e = eval.evaluate(network2, [network1], is_bestNN=True)
     print(e)
-    eval.set_epoch(5)
+    eval._set_epoch(5)
     print(eval.retrain([network1, network2]))
     # eval.add_data(5000)
     # print(eval._toposort([[1, 3, 6, 7], [2, 3, 4], [3, 5, 7, 8], [

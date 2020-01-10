@@ -108,6 +108,8 @@ class Evaluator:
             layer = self._makeconv(inputs, cell, node, train_flag)
         elif cell.type == 'pooling':
             layer = self._makepool(inputs, cell)
+        elif cell.type == 'id':
+            layer = tf.identity(inputs)
         elif cell.type == 'sep_conv':
             layer = self._makesep_conv(inputs, cell, node, train_flag)
         # TODO add any other new operations here
@@ -235,11 +237,31 @@ class Evaluator:
 
     def _pad(self, inputs, layer):
         # padding
-        a = tf.shape(layer)[1]
-        b = tf.shape(inputs)[1]
-        pad = tf.abs(tf.subtract(a, b))
-        output = tf.where(tf.greater(a, b), tf.concat([tf.pad(inputs, [[0, 0], [0, pad], [0, pad], [0, 0]]), layer], 3),
-                          tf.concat([inputs, tf.pad(layer, [[0, 0], [0, pad], [0, pad], [0, 0]])], 3))
+        if self.input_shape[1]:
+            a = int(layer.shape[1])
+            b = int(inputs.shape[1])
+            pad = abs(a - b)
+            if layer.shape[1] > inputs.shape[1]:
+                tmp = tf.pad(inputs, [[0, 0], [0, pad], [0, pad], [0, 0]])
+                output = tf.concat([tmp, layer], 3)
+            elif layer.shape[1] < inputs.shape[1]:
+                tmp = tf.pad(layer, [[0, 0], [0, pad], [0, pad], [0, 0]])
+                output = tf.concat([inputs, tmp], 3)
+            else:
+                output = tf.concat([inputs, layer], 3)
+        else:
+            a = tf.shape(layer)[1]
+            b = tf.shape(inputs)[1]
+            pad = tf.abs(tf.subtract(a, b))
+            cond = tf.greater(a, b)
+
+            def f1():
+                return tf.concat([tf.pad(inputs, [[0, 0], [0, pad], [0, pad], [0, 0]]), layer], 3)
+
+            def f2():
+                return tf.concat([inputs, tf.pad(layer, [[0, 0], [0, pad], [0, pad], [0, 0]])], 3)
+
+            output = tf.cond(cond, f1, f2)
         return output
 
     def evaluate(self, network, pre_block=[], is_bestNN=False, update_pre_weight=False):
@@ -281,8 +303,9 @@ class Evaluator:
             saver = tf.train.Saver(tf.global_variables())
 
             if is_bestNN:  # save model
-                saver.save(sess, os.path.join(
-                    self.model_path, 'model' + str(network.id)))
+                if not os.path.exists(os.path.join(self.model_path)):
+                    os.makedirs(os.path.join(self.model_path))
+                saver.save(sess, os.path.join(self.model_path, 'model' + str(network.id)))
 
         NAS_LOG << ('eva', self.log)
         return precision
@@ -291,8 +314,9 @@ class Evaluator:
         '''Get input for _inference'''
         # if it got previous blocks
         if len(pre_block) > 0:
-            new_saver = tf.train.import_meta_graph(
-                os.path.join(self.model_path, 'model' + str(pre_block[-1].id) + '.meta'))
+            tmp = os.path.join(self.model_path, 'model' + str(pre_block[-1].id) + '.meta')
+            assert os.path.exists(tmp)
+            new_saver = tf.train.import_meta_graph(tmp)
             new_saver.restore(sess, os.path.join(
                 self.model_path, 'model' + str(pre_block[-1].id)))
             graph = tf.get_default_graph()
@@ -391,8 +415,8 @@ class Evaluator:
 if __name__ == '__main__':
     os.environ["CUDA_VISIBLE_DEVICES"] = "1"
     eval = Evaluator()
-    eval.set_data_size(50000)
-    eval.set_epoch(10)
+    eval._set_data_size(50000)
+    eval._set_epoch(10)
 
     graph_full = [[1, 3], [2, 3], [3], [4]]
     cell_list = [Cell('conv', 24, 3, 'relu'), Cell('conv', 32, 3, 'relu'), Cell('conv', 24, 3, 'relu'),
@@ -400,5 +424,5 @@ if __name__ == '__main__':
     network1 = NetworkItem(0, graph_full, cell_list, "")
     network2 = NetworkItem(1, graph_full, cell_list, "")
     e = eval.evaluate(network1, is_bestNN=True)
-    eval.set_data_size(500)
+    eval._set_data_size(500)
     e = eval.evaluate(network2, [network1], is_bestNN=True)
