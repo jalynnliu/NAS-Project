@@ -195,7 +195,7 @@ class Evaluator:
         self.INITIAL_LEARNING_RATE = 0.025
         return
 
-    def set_epoch(self, e):
+    def _set_epoch(self, e):
         self.epoch = e
         return
 
@@ -298,14 +298,10 @@ class Evaluator:
             inputdim = x.shape[3]
             kernel = self._get_variable('weights',
                                         shape=[hplist.kernel_size, hplist.kernel_size, inputdim, hplist.filter_size])
-
+            x = self._activation_layer(hplist.activation, x, scope)
             x = tf.nn.conv2d(x, kernel, [1, 1, 1, 1], padding='SAME')
-
-            if hplist.filter_size == 128:
-                biases = self._get_variable('biases', hplist.filter_size)
-                x = self._activation_layer(hplist.activation, tf.nn.bias_add(x, biases), scope)
-            else:
-                x = self._batch_norm(self._activation_layer(hplist.activation, x, scope), train_flag)
+            biases = self._get_variable('biases', hplist.filter_size)
+            x = self._batch_norm(tf.nn.bias_add(x, biases), train_flag)
         return x
 
     def _makesep_conv(self, inputs, hplist, node, train_flag):
@@ -388,11 +384,31 @@ class Evaluator:
 
     def _pad(self, inputs, layer):
         # padding
-        a = tf.shape(layer)[1]
-        b = tf.shape(inputs)[1]
-        pad = tf.abs(tf.subtract(a, b))
-        output = tf.where(tf.greater(a, b), tf.concat([tf.pad(inputs, [[0, 0], [0, pad], [0, pad], [0, 0]]), layer], 3),
-                          tf.concat([inputs, tf.pad(layer, [[0, 0], [0, pad], [0, pad], [0, 0]])], 3))
+        if self.input_shape[1]:
+            a = int(layer.shape[1])
+            b = int(inputs.shape[1])
+            pad = abs(a - b)
+            if layer.shape[1] > inputs.shape[1]:
+                tmp = tf.pad(inputs, [[0, 0], [0, pad], [0, pad], [0, 0]])
+                output = tf.concat([tmp, layer], 3)
+            elif layer.shape[1] < inputs.shape[1]:
+                tmp = tf.pad(layer, [[0, 0], [0, pad], [0, pad], [0, 0]])
+                output = tf.concat([inputs, tmp], 3)
+            else:
+                output = tf.concat([inputs, layer], 3)
+        else:
+            a = tf.shape(layer)[1]
+            b = tf.shape(inputs)[1]
+            pad = tf.abs(tf.subtract(a, b))
+            cond = tf.greater(a, b)
+
+            def f1():
+                return tf.concat([tf.pad(inputs, [[0, 0], [0, pad], [0, pad], [0, 0]]), layer], 3)
+
+            def f2():
+                return tf.concat([inputs, tf.pad(layer, [[0, 0], [0, pad], [0, pad], [0, 0]])], 3)
+
+            output = tf.cond(cond, f1, f2)
         return output
 
     def evaluate(self, network, pre_block=[], is_bestNN=False, update_pre_weight=False):
@@ -420,22 +436,23 @@ class Evaluator:
 
             graph_full, cell_list = self._recode(network.graph, network.cell_list,
                                                  NAS_CONFIG['nas_main']['repeat_num'])
-            # graph_full = graph_full + [[]]
-            # if NAS_CONFIG['nas_main']['link_node']:
-            #     # a pooling layer for last repeat block
-            #     cell_list = cell_list + [Cell('pooling', 'max', 2)]
-            # else:
-            #     cell_list = cell_list + [Cell('id', '', 1)]
+            graph_full = graph_full + [[]]
+            if NAS_CONFIG['nas_main']['link_node']:
+                # a pooling layer for last repeat block
+                cell_list = cell_list + [Cell('pooling', 'max', 2)]
+            else:
+                cell_list = cell_list + [Cell('id', '', 1)]
             logits = self._inference(block_input, graph_full, cell_list, train_flag)
 
-            precision, log = self._eval(sess, logits, data_x, data_y, train_flag)
+            precision, log = self.eval(sess, logits, data_x, data_y, train_flag)
             self.log += log
 
             saver = tf.train.Saver(tf.global_variables())
 
             if is_bestNN:  # save model
-                saver.save(sess, os.path.join(
-                    self.model_path, 'model' + str(network.id)))
+                if not os.path.exists(os.path.join(self.model_path)):
+                    os.makedirs(os.path.join(self.model_path))
+                saver.save(sess, os.path.join(self.model_path, 'model' + str(network.id)))
 
         NAS_LOG << ('eva', self.log)
         return precision
@@ -444,8 +461,9 @@ class Evaluator:
         '''Get input for _inference'''
         # if it got previous blocks
         if len(pre_block) > 0:
-            new_saver = tf.train.import_meta_graph(
-                os.path.join(self.model_path, 'model' + str(pre_block[-1].id) + '.meta'))
+            tmp = os.path.join(self.model_path, 'model' + str(pre_block[-1].id) + '.meta')
+            assert os.path.exists(tmp)
+            new_saver = tf.train.import_meta_graph(tmp)
             new_saver.restore(sess, os.path.join(
                 self.model_path, 'model' + str(pre_block[-1].id)))
             graph = tf.get_default_graph()
@@ -475,7 +493,7 @@ class Evaluator:
                 new_graph.append([x + add for x in sub_list])
         return new_graph, new_cell_list
 
-    def _eval(self, sess, logits, data_x, data_y, train_flag):
+    def eval(self, sess, logits, data_x, data_y, train_flag):
         # TODO change here to run training step and evaluation step
         """
         The actual training process, including the definination of loss and train optimizer
@@ -571,7 +589,7 @@ class Evaluator:
         target = precision
         return target
 
-    def set_data_size(self, num):
+    def _set_data_size(self, num):
         if num > len(list(self.train_label)) or num < 0:
             num = len(list(self.train_label))
             print('Warning! Data size has been changed to', num, ', all data is loaded.')
@@ -582,8 +600,8 @@ class Evaluator:
 if __name__ == '__main__':
     os.environ["CUDA_VISIBLE_DEVICES"] = "1"
     eval = Evaluator()
-    eval.set_data_size(-1)
-    eval.set_epoch(50)
+    eval._set_data_size(-1)
+    eval._set_epoch(50)
 
     graph_full = [[1]]
     cell_list = [Cell('conv', 128, 3, 'relu')]
@@ -599,5 +617,5 @@ if __name__ == '__main__':
     network1 = NetworkItem(0, graph_full, cell_list, "")
     network2 = NetworkItem(1, graph_full, cell_list, "")
     e = eval.evaluate(network1, is_bestNN=True)
-    eval.set_data_size(500)
+    eval._set_data_size(500)
     e = eval.evaluate(network2, [network1], is_bestNN=True)
